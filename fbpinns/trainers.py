@@ -227,7 +227,18 @@ def _get_ujs(x_batch, jmaps, u):
         jacs.append(jac+(fin,))
 
     # index required jacobians
-    ujs = [jacs[il][io][:,iu:iu+1] for il,io,iu in jac_is]
+    # ujs = [jacs[il][io][:,iu:iu+1] for il,io,iu in jac_is]
+
+    """ 
+    Modified to support multi output PINNs (eg, ux, uy)
+    Backwards compatible for single output PINNs
+    
+    """
+    ujs = []
+    for il,io,iu in jac_is:
+        # il: layer index, io: output index (0 for ux, 1 for uy), iu: derivative index
+        uj = jacs[il][io][..., iu] # supports multiple output without slicing errors
+        ujs.append(uj) 
 
     logger.debug("fs")
     logger.debug(fs)
