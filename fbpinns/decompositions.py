@@ -137,9 +137,14 @@ class RectangularDecompositionND(Decomposition):
 
         # get subdomain extents
         xs = np.stack(np.meshgrid(*subdomain_xs, indexing="ij"), 0)# (xd, nm)
+
+        # autobraodcast subdomain_ws to match xs shape if needed
+        if np.ndim(subdomain_ws[0]) ==1:
+            subdomain_ws = [np.broadcast_to(w, len(x)-1) for w, x in zip(subdomain_ws, subdomain_xs)]
+
         ws = np.stack(np.meshgrid(*subdomain_ws, indexing="ij"), 0)# (xd, nm)
         if xs.shape != ws.shape:
-            raise ValueError("shape of subdomain_ws not same as subdomain_xs")
+            raise ValueError("shape of subdomain_ws not same as subdomain_xs (after broadcasting)")
         xmins, xmaxs = xs - (ws/2), xs + (ws/2)
 
         # get subdomain overlap widths
