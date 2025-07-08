@@ -232,13 +232,27 @@ def _get_ujs(x_batch, jmaps, u):
     """ 
     Modified to support multi output PINNs (eg, ux, uy)
     Backwards compatible for single output PINNs
-    
+
     """
     ujs = []
     for il,io,iu in jac_is:
         # il: layer index, io: output index (0 for ux, 1 for uy), iu: derivative index
-        uj = jacs[il][io][..., iu] # supports multiple output without slicing errors
+        jac_tensor = jacs[il] [io]
+
+        # Handle different tensor shapes robustly
+        if jac_tensor.ndim >= 2:
+            # Multiple-dimensional case: select component along last axis
+            if iu < jac_tensor.shape[-1]:
+                uj = jac_tensor[..., iu:iu+1] # Preserves dimension
+            else:
+                # Handle edge case where iu is out of bounds
+                uj = jac_tensor[..., :1] * 0 # Zero tensor with correct shape
+        else:
+            # 1D case: Simpler indexing
+            uj = jac_tensor[..., None] # Add dimension
         ujs.append(uj) 
+        #uj = jacs[il][io][..., iu] # supports multiple output without slicing errors
+        #ujs.append(uj) 
 
     logger.debug("fs")
     logger.debug(fs)

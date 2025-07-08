@@ -134,17 +134,60 @@ class RectangularDecompositionND(Decomposition):
 
     @staticmethod
     def _get_level_params(il, xd, subdomain_xs, subdomain_ws, unnorm):
+        """ 
+        Improved version with robust broadcasting for subdomain_ws
 
+        """
         # get subdomain extents
         xs = np.stack(np.meshgrid(*subdomain_xs, indexing="ij"), 0)# (xd, nm)
 
-        # autobraodcast subdomain_ws to match xs shape if needed
-        if np.ndim(subdomain_ws[0]) ==1:
-            subdomain_ws = [np.broadcast_to(w, len(x)-1) for w, x in zip(subdomain_ws, subdomain_xs)]
+        # Robust broadcasting for subdomain_ws to match xs shape
+        subdomain_ws_broadcast = []
+        for i, (x_coords, w_spec) in enumerate(zip(subdomain_xs, subdomain_ws)):
+            # Handle different input formats for widths
+            if np.isscalar(w_spec):
+                # Scalar width - broadcast to full coordinate array length
+                w_array = np.full_like(x_coords, w_spec)
+            elif hasattr(w_spec, '__len__'):
+                w_array = np.asarray(w_spec)
+                if len(w_array) == 1:
+                    # Single value array - broadcast to full length
+                    w_array = np.full_like(x_coords, w_array[0])
+                elif len(w_array) == len(x_coords):
+                    # Already correct length
+                    pass # Already correct shape
+                else:
+                    # Try to broadcast if possible
+                    try:
+                        w_array = np.broadcast_to(w_array, x_coords.shape)
+                    except ValueError:
+                        raise ValueError(
+                            f"Cannot broadcast subdomain_ws[{i}] with shape {w_array.shape}"
+                            f"To match subdomain_xs[{i}] with shape{x_coords.shape}"
+                            f"subdomain_ws[{i}] should be either scalar, single value, or array of length {len(x_coords)}"
+                        )
+            else:
+                raise TypeError(f"subdomain_ws[{i}] must be scalar or array_like")
+            subdomain_ws_broadcast.append(w_array)
 
-        ws = np.stack(np.meshgrid(*subdomain_ws, indexing="ij"), 0)# (xd, nm)
+        # Create meshgrid with properly shaped widths
+        ws = np.stack(np.meshgrid(*subdomain_ws_broadcast, indexing = "ij"), 0) # (xd, nm)
+
+        # Verify if shapes match
         if xs.shape != ws.shape:
-            raise ValueError("shape of subdomain_ws not same as subdomain_xs (after broadcasting)")
+            raise ValueError(
+                f"After broadcasting, subdomain_ws shape {ws.shape}"
+                f"still doesnt match subdomain_xs shape {xs.shape}"
+                f"This suggests an internal error in broadcasting logic"
+            )
+                        
+        
+        # if np.ndim(subdomain_ws[0]) ==1:
+           # subdomain_ws = [np.broadcast_to(w, len(x)-1) for w, x in zip(subdomain_ws, subdomain_xs)]
+
+        #ws = np.stack(np.meshgrid(*subdomain_ws, indexing="ij"), 0)# (xd, nm)
+        #if xs.shape != ws.shape:
+            #raise ValueError("shape of subdomain_ws not same as subdomain_xs (after broadcasting)")
         xmins, xmaxs = xs - (ws/2), xs + (ws/2)
 
         # get subdomain overlap widths
