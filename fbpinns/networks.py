@@ -40,7 +40,7 @@ class FCN(Network):
     "Fully connected network"
 
     @staticmethod
-    def init_params(key, layer_sizes):
+    def init_params(key, layer_sizes, activation = None):
         keys = random.split(key, len(layer_sizes)-1)
         params = [FCN._random_layer_params(k, m, n)
                 for k, m, n in zip(keys, layer_sizes[:-1], layer_sizes[1:])]
