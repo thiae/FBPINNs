@@ -175,7 +175,7 @@ class CoupledMechanicsTrainer:
             clear_output=True
         )
         self.trainer = FBPINNTrainer(self.config)
-        self.all_params = self.trainer.init_all_params()
+        self.all_params = None
         self.external_pressure = None  # Store coupling term
     
     def set_coupling_term(self, external_pressure):
@@ -188,15 +188,17 @@ class CoupledMechanicsTrainer:
         original_loss_fn = self.trainer.problem.loss_fn
         
         def coupled_loss_fn(all_params, constraints):
-            return original_loss_fn(all_params, constraints, self.external_pressure)
+            return original_loss_fn(all_params, constraints, self.external_div_u)  # for flow
+            # OR: return original_loss_fn(all_params, constraints, self.external_pressure)  # for mechanics
         
         # Replace loss function temporarily
         self.trainer.problem.loss_fn = coupled_loss_fn
         
-        # Train for specified steps
+        # Set number of steps and train
         old_n_steps = self.config.n_steps
         self.config.n_steps = n_steps
         
+        # Train and get parameters
         self.all_params = self.trainer.train(self.all_params)
         
         # Restore original settings
