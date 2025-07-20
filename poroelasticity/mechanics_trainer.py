@@ -149,14 +149,14 @@ class BiotMechanics2D(Problem):
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape):
         """
-        Placeholder exact solution - returns zeros
+        Placeholder exact solution - small non-zero values to avoid division by zero
         For now we don't have an analytical solution
         """
         # For mechanics: return [u_x, u_y] 
         if hasattr(all_params['static']['problem'], 'G'):  # Mechanics
-            return jnp.zeros((x_batch.shape[0], 2))
+            return jnp.ones((x_batch.shape[0], 2)) * 1e-6
         else:  # Flow
-            return jnp.zeros((x_batch.shape[0], 1))
+            return jnp.ones((x_batch.shape[0], 1)) * 1e-6
 
 class CoupledMechanicsTrainer:
     """Wrapper class to handle coupling for mechanics trainer"""

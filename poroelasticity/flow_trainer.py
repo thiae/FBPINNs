@@ -107,9 +107,9 @@ class BiotFlow2D(Problem):
         """
         # For mechanics: return [u_x, u_y] 
         if hasattr(all_params['static']['problem'], 'G'):  # Mechanics
-            return jnp.zeros((x_batch.shape[0], 2))
+            return jnp.ones((x_batch.shape[0], 2)) * 1e-6
         else:  # Flow
-            return jnp.zeros((x_batch.shape[0], 1))
+            return jnp.ones((x_batch.shape[0], 1)) * 1e-6
 
 class CoupledFlowTrainer:
     """Wrapper class to handle coupling for flow trainer"""
