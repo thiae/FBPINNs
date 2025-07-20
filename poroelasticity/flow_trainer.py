@@ -33,7 +33,7 @@ class BiotFlow2D(Problem):
             (0, ()), (0, (0,0)), (0, (1,1))
         )
 
-        boundary_batch_shapes = ((25,), (25,))
+        boundary_batch_shapes = ((25,), (25,), (25,), (25,))
         x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
         # Left boundary: p=1
@@ -47,10 +47,13 @@ class BiotFlow2D(Problem):
         required_ujs_right = ((0, ()),)
 
         return [
-            [x_batch_phys, required_ujs_phys],
-            [x_batch_left, p_target_left, required_ujs_left],
-            [x_batch_right, p_target_right, required_ujs_right]
-        ]
+    [x_batch_phys, required_ujs_phys],
+    [x_batch_left, p_target_left, required_ujs_left],
+    [x_batch_right, p_target_right, required_ujs_right],
+    # Add these two missing boundaries:
+    [x_batches_boundaries[2], jnp.zeros((x_batches_boundaries[2].shape[0], 1)), ((0, ()),)],  # Bottom
+    [x_batches_boundaries[3], jnp.zeros((x_batches_boundaries[3].shape[0], 1)), ((0, ()),)]   # Top
+]
 
     @staticmethod
     def loss_fn(all_params, constraints, external_div_u=None):
