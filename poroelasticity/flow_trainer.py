@@ -157,7 +157,7 @@ class CoupledFlowTrainer:
         self.trainer.c.n_steps = n_steps
         
         # Train
-        self.all_params = self.trainer.train(self.all_params)
+        self.all_params = self.trainer.train()
         
         # Restore original settings
         self.trainer.c.n_steps = old_n_steps
