@@ -148,15 +148,15 @@ class BiotMechanics2D(Problem):
     
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape):
-        """
-        Placeholder exact solution - small non-zero values to avoid division by zero
-        For now we don't have an analytical solution
-        """
-        # For mechanics: return [u_x, u_y] 
-        if hasattr(all_params['static']['problem'], 'G'):  # Mechanics
-            return jnp.ones((x_batch.shape[0], 2)) * 1e-6
-        else:  # Flow
-            return jnp.ones((x_batch.shape[0], 1)) * 1e-6
+        """Simple analytical displacement field for testing"""
+        x = x_batch[:, 0]
+        y = x_batch[:, 1]
+        
+        # Simple displacement field that satisfies some boundary conditions
+        u_x = 0.001 * x * (1 - x) * y  # Zero at x=0,1 boundaries
+        u_y = 0.001 * y * (1 - y) * x  # Zero at y=0,1 boundaries
+        
+        return jnp.column_stack([u_x, u_y])
 
 class CoupledMechanicsTrainer:
     """Wrapper class to handle coupling for mechanics trainer"""

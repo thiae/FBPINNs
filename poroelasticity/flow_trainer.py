@@ -99,18 +99,17 @@ class BiotFlow2D(Problem):
         total_loss = physics_loss + 1000.0 * (left_bc_loss + right_bc_loss)
         return total_loss
     
-    @staticmethod
+    @staticmethod  
     def exact_solution(all_params, x_batch, batch_shape):
-        """
-        Placeholder exact solution - returns zeros
-        For now we don't have an analytical solution
-        """
-        # For mechanics: return [u_x, u_y] 
-        if hasattr(all_params['static']['problem'], 'G'):  # Mechanics
-            return jnp.ones((x_batch.shape[0], 2)) * 1e-6
-        else:  # Flow
-            return jnp.ones((x_batch.shape[0], 1)) * 1e-6
-
+        """Simple analytical pressure field for testing"""
+        x = x_batch[:, 0]
+        y = x_batch[:, 1]
+        
+        # Simple pressure field: linear variation from left to right
+        p = 1.0 * (1 - x)  # Pressure decreases from 1 to 0
+        
+        return p.reshape(-1, 1)
+    
 class CoupledFlowTrainer:
     """Wrapper class to handle coupling for flow trainer"""
     
