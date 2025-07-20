@@ -93,21 +93,37 @@ class BiotMechanics2D(Problem):
                     last_val = external_pressure[-1:]
                     external_pressure = jnp.concatenate([external_pressure,
                                                        jnp.repeat(last_val, repeats, axis=0)])
-            
-            # Compute pressure gradients using finite differences on the pressure field
-            # Reshape to 2D grid for gradient computation
-            n_grid = int(jnp.sqrt(x_batch_phys.shape[0]))
-            if n_grid * n_grid == x_batch_phys.shape[0]:
-                p_grid = external_pressure.reshape((n_grid, n_grid))
-                dpdx_grid, dpdy_grid = jnp.gradient(p_grid)
-                dpdx = dpdx_grid.flatten().reshape(-1, 1)
-                dpdy = dpdy_grid.flatten().reshape(-1, 1)
-            else:
-                # Fallback: use simple finite differences
+            # Simplified JAX-safe pressure gradient computation
+            if external_pressure is not None:
+                # Use simple finite differences without grid reshaping
                 dpdx = jnp.gradient(external_pressure.flatten())
                 dpdy = jnp.zeros_like(dpdx)
                 dpdx = dpdx.reshape(-1, 1) 
                 dpdy = dpdy.reshape(-1, 1)
+                
+                # Ensure correct length
+                n_points = x_batch_phys.shape[0]
+                dpdx = dpdx[:n_points]
+                dpdy = dpdy[:n_points]
+            else:
+                # No coupling: set pressure gradients to zero
+                dpdx = jnp.zeros((x_batch_phys.shape[0], 1))
+                dpdy = jnp.zeros((x_batch_phys.shape[0], 1))        
+            
+            # Compute pressure gradients using finite differences on the pressure field
+            # Reshape to 2D grid for gradient computation
+            #n_grid = jnp.sqrt(x_batch_phys.shape[0]).astype(int)
+            #if n_grid * n_grid == x_batch_phys.shape[0]:
+             #   p_grid = external_pressure.reshape((n_grid, n_grid))
+              #  dpdx_grid, dpdy_grid = jnp.gradient(p_grid)
+               # dpdx = dpdx_grid.flatten().reshape(-1, 1)
+                #dpdy = dpdy_grid.flatten().reshape(-1, 1)
+            #else:
+                # Fallback: use simple finite differences
+             #   dpdx = jnp.gradient(external_pressure.flatten())
+              #  dpdy = jnp.zeros_like(dpdx)
+               # dpdx = dpdx.reshape(-1, 1) 
+                #dpdy = dpdy.reshape(-1, 1)
         else:
             # No coupling: set pressure gradients to zero
             dpdx = jnp.zeros((x_batch_phys.shape[0], 1))
