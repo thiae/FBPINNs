@@ -137,26 +137,31 @@ class CoupledFlowTrainer:
     
     def train_step(self, n_steps=1):
         """Train with current coupling term"""
-        # Temporarily modify the loss function to include coupling
-        original_loss_fn = self.trainer.problem.loss_fn
+        # Get the problem class and original loss function
+        problem_class = self.trainer.c.problem
+        original_loss_fn = problem_class.loss_fn
         
-        def coupled_loss_fn(all_params, constraints):
-            return original_loss_fn(all_params, constraints, self.external_div_u)  # for flow
-            # OR: return original_loss_fn(all_params, constraints, self.external_pressure)  # for mechanics
+        # Create coupled loss function
+        if hasattr(self, 'external_div_u'):  # Flow trainer
+            def coupled_loss_fn(all_params, constraints):
+                return original_loss_fn(all_params, constraints, self.external_div_u)
+        else:  # Mechanics trainer
+            def coupled_loss_fn(all_params, constraints):
+                return original_loss_fn(all_params, constraints, self.external_pressure)
         
-        # Replace loss function temporarily
-        self.trainer.problem.loss_fn = coupled_loss_fn
+        # Temporarily replace the loss function
+        problem_class.loss_fn = coupled_loss_fn
         
         # Set number of steps and train
-        old_n_steps = self.config.n_steps
-        self.config.n_steps = n_steps
+        old_n_steps = self.trainer.c.n_steps
+        self.trainer.c.n_steps = n_steps
         
-        # Train and get parameters
+        # Train
         self.all_params = self.trainer.train(self.all_params)
         
         # Restore original settings
-        self.config.n_steps = old_n_steps
-        self.trainer.problem.loss_fn = original_loss_fn
+        self.trainer.c.n_steps = old_n_steps
+        problem_class.loss_fn = original_loss_fn
         
         return self.all_params
     
