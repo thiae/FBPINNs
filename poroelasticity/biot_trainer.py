@@ -72,6 +72,7 @@ class BiotCoupled2D(Problem):
         d = all_params["static"]["problem"]["dims"][1]
         dom.setdefault("xmin", jnp.zeros((d,), dtype=jnp.float32))
         dom.setdefault("xmax", jnp.ones((d,),  dtype=jnp.float32))
+        dom.setdefault("xd", d)
 
         # hack: if they asked for a 1‑tuple grid in 2D, just pad it to (N,N)
         bs0 = batch_shapes[0]
@@ -103,7 +104,7 @@ class BiotCoupled2D(Problem):
             (2, (1,1))
         ) 
         
-        # Boundary constraints
+        # Sampling the Boundary constraints
         boundary_batch_shapes = ((25,), (25,), (25,), (25,))
         x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
@@ -169,11 +170,21 @@ class BiotCoupled2D(Problem):
         # Compute divergence of displacement: ∇·u = ∂u_x/∂x + ∂u_y/∂y
         div_u = duxdx + duydy
         
-        # Equilibrium equations with coupling term α∇p
-        equilibrium_x = ((2*G + lam)*d2uxdx2 + G*d2uxdy2 + 
-                        (G + lam)*d2uxdxdy + alpha*dpdx)
-        equilibrium_y = (G*d2uydxdy + (G + lam)*d2uydx2 + 
-                        (2*G + lam)*d2uydy2 + alpha*dpdy)
+        # Equilibrium equations: ∇·σ' + α∇p = 0
+        # where σ' is effective stress: σ'_ij = 2G*ε_ij + λ*δ_ij*∇·u
+        # ε_ij is strain tensor: ε_xx = ∂u_x/∂x, ε_yy = ∂u_y/∂y, ε_xy = 0.5*(∂u_x/∂y + ∂u_y/∂x)
+        
+        # X-direction equilibrium: ∂σ'_xx/∂x + ∂σ'_xy/∂y + α∂p/∂x = 0
+        # σ'_xx = (2G + λ)∂u_x/∂x + λ∂u_y/∂y
+        # σ'_xy = G(∂u_x/∂y + ∂u_y/∂x)
+        equilibrium_x = ((2*G + lam)*d2uxdx2 + lam*d2uydxdy + 
+                        G*d2uxdy2 + G*d2uydxdy + alpha*dpdx)
+        
+        # Y-direction equilibrium: ∂σ'_xy/∂x + ∂σ'_yy/∂y + α∂p/∂y = 0  
+        # σ'_yy = (2G + λ)∂u_y/∂y + λ∂u_x/∂x
+        # σ'_xy = G(∂u_x/∂y + ∂u_y/∂x)
+        equilibrium_y = (G*d2uxdxdy + G*d2uydx2 + 
+                        lam*d2uxdxdy + (2*G + lam)*d2uydy2 + alpha*dpdy)
         
         mechanics_loss = jnp.mean(equilibrium_x**2) + jnp.mean(equilibrium_y**2)
 
@@ -189,7 +200,14 @@ class BiotCoupled2D(Problem):
         boundary_loss = 0.0
         
         # LEFT BOUNDARY: u_x=0, u_y=0, p=1
-        x_batch_left, ux_target_left, uy_target_left, p_target_left, ux_left, uy_left, p_left = constraints[1]
+        constraint_left = constraints[1]
+        x_batch_left = constraint_left[0]
+        ux_target_left = constraint_left[1] 
+        uy_target_left = constraint_left[2]
+        p_target_left = constraint_left[3]
+        ux_left = constraint_left[4]
+        uy_left = constraint_left[5] 
+        p_left = constraint_left[6]
         boundary_loss += (jnp.mean((ux_left - ux_target_left)**2) + 
                          jnp.mean((uy_left - uy_target_left)**2) +
                          jnp.mean((p_left - p_target_left)**2))
@@ -199,7 +217,14 @@ class BiotCoupled2D(Problem):
         # Implement traction BCs: σ·n = 0 (n=[1,0] on right boundary)
         # Normal stress: σxx = (2G + λ)∂ux/∂x + λ∂uy/∂y - αp = 0
         # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
-        x_batch_right,p_target_right, duxdx_right, duxdy_right, duydx_right, duydy_right, p_right = constraints[2]
+        constraint_right = constraints[2]
+        x_batch_right = constraint_right[0]
+        p_target_right = constraint_right[1]
+        duxdx_right = constraint_right[2]
+        duxdy_right = constraint_right[3]
+        duydx_right = constraint_right[4]
+        duydy_right = constraint_right[5]
+        p_right = constraint_right[6]
         normal_residual = (2*G + lam)*duxdx_right + lam*duydy_right - alpha*p_right
         shear_residual = G*(duxdy_right + duydx_right)
         boundary_loss += (jnp.mean(normal_residual**2) + 
@@ -207,7 +232,11 @@ class BiotCoupled2D(Problem):
                          jnp.mean((p_right - p_target_right)**2))
 
         # BOTTOM BOUNDARY: u_y=0, ∂p/∂y=0
-        x_batch_bottom, uy_target_bottom, uy_bottom, dpdy_bottom = constraints[3]
+        constraint_bottom = constraints[3]
+        x_batch_bottom = constraint_bottom[0]
+        uy_target_bottom = constraint_bottom[1]
+        uy_bottom = constraint_bottom[2]
+        dpdy_bottom = constraint_bottom[3]
         boundary_loss += (jnp.mean((uy_bottom - uy_target_bottom)**2) +
                          jnp.mean(dpdy_bottom**2))
         
@@ -215,7 +244,14 @@ class BiotCoupled2D(Problem):
         # Implement traction BCs: σ·n = 0 (n=[0,1] on top boundary)
         # Normal stress: σyy = (2G + λ)∂uy/∂y + λ∂ux/∂x - αp = 0
         # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
-        x_batch_top, duxdx_top, duxdy_top, duydx_top, duydy_top, p_top, dpdy_top = constraints[4]
+        constraint_top = constraints[4]
+        x_batch_top = constraint_top[0]
+        duxdx_top = constraint_top[1]
+        duxdy_top = constraint_top[2]
+        duydx_top = constraint_top[3]
+        duydy_top = constraint_top[4]
+        p_top = constraint_top[5]
+        dpdy_top = constraint_top[6]
         normal_residual_top = (2*G + lam)*duydy_top + lam*duxdx_top - alpha*p_top
         shear_residual_top = G*(duxdy_top + duydx_top)
         boundary_loss += (jnp.mean(normal_residual_top**2) +

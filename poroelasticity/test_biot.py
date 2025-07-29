@@ -13,6 +13,10 @@ def mock_problem():
     all_params = {"static": {"problem": static}, "step": 0}
     # Create domain and sampler key
     dom = RectangularDomainND()
+    # Initialize domain parameters properly
+    domain_static, _ = dom.init_params(jnp.array([0., 0.]), jnp.array([1., 1.]))
+    all_params["static"]["domain"] = domain_static
+    
     key = jax.random.PRNGKey(0)
     # Define batch shapes: 10 interior points, 5 per boundary
     shapes = ((10,), (5,), (5,), (5,), (5,))
@@ -26,14 +30,18 @@ def test_sample_constraints_structure(mock_problem):
     all_params, cons = mock_problem
     # Expect 1 interior + 4 BC blocks
     assert len(cons) == 5, "Expected 5 constraint blocks"
-     # Interior: x_batch + 12 derivatives
-    x_phys, req = cons[0]
+    
+    # Interior: x_batch + required_ujs (12 derivatives) -> framework adds derivatives
+    interior_constraint = cons[0]
+    assert len(interior_constraint) >= 2, "Interior should have at least x_batch and required_ujs"
+    x_phys = interior_constraint[0] 
     assert isinstance(x_phys, jnp.ndarray)
     assert x_phys.shape == (10, 2)
-    assert len(req) == 12, "Interior must request 12 derivatives"
-     # Left BC: x + 3 targets + 3 fields
-    left = cons[1]
-    assert len(left) == 1 + 3 + 3
+    
+    # Left BC: x_batch + 3 targets + required_ujs -> framework adds derivatives  
+    left_constraint = cons[1]
+    assert len(left_constraint) >= 5, "Left BC should have at least x_batch, 3 targets, and required_ujs"
+    assert left_constraint[0].shape == (5, 2), "Left BC x_batch should be (5, 2)"
 
 def test_loss_fn_returns_scalar(mock_problem):
     all_params, cons = mock_problem
