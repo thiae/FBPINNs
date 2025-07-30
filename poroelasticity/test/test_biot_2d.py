@@ -3,8 +3,13 @@ import sys
 import pytest
 import jax
 import jax.numpy as jnp
+
+# Add the parent directory to Python path to find modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
+
 from fbpinns.domains import RectangularDomainND
-from poroelasticity.biot_trainer import BiotCoupled2D, CoupledTrainer  
+from trainers.biot_trainer_2d import BiotCoupled2D, CoupledTrainer  
 
 @pytest.fixture
 def mock_problem():
@@ -32,14 +37,14 @@ def test_sample_constraints_structure(mock_problem):
     # Expect 1 interior + 4 BC blocks
     assert len(cons) == 5, "Expected 5 constraint blocks"
     
-    # Interior: x_batch + required_ujs (12 derivatives) -> framework adds derivatives
+    # Interior: x_batch + required_ujs (12 derivatives) : framework adds derivatives
     interior_constraint = cons[0]
     assert len(interior_constraint) >= 2, "Interior should have at least x_batch and required_ujs"
     x_phys = interior_constraint[0] 
     assert isinstance(x_phys, jnp.ndarray)
     assert x_phys.shape == (100, 2)  # Grid sampler converts (10,) to (10,10) = 100 points
-    
-    # Left BC: x_batch + 3 targets + required_ujs -> framework adds derivatives  
+
+    # Left BC: x_batch + 3 targets + required_ujs : framework adds derivatives
     left_constraint = cons[1]
     assert len(left_constraint) >= 5, "Left BC should have at least x_batch, 3 targets, and required_ujs"
     assert left_constraint[0].shape == (5, 2), "Left BC x_batch should be (5, 2)"
@@ -75,10 +80,10 @@ def test_loss_fn_returns_scalar(mock_problem):
 
 def test_mini_training_run():
     trainer = CoupledTrainer()
-     # Pre-train mechanics only
+     # Pre train mechanics only
     trainer.auto_balance = False
     trainer.train_mechanics_only(n_steps=10)
-     # Pre-train flow only
+     # Pre train flow only
     trainer.train_flow_only(n_steps=10)
      # Coupled training
     trainer.auto_balance = True

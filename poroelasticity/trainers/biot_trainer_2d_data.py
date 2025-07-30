@@ -4,8 +4,6 @@
 This module extends the basic Biot trainer to incorporate experimental VTK data
 for data-enhanced physics-informed neural network training.
 
-Author: Assistant
-Date: 2024
 """
 
 import numpy as np
@@ -16,8 +14,7 @@ import os
 from pathlib import Path
 
 # Import the base trainer classes
-from biot_trainer import BiotCoupled2D, BiotCoupledTrainer
-
+from biot_trainer_2d import BiotCoupled2D, BiotCoupledTrainer
 
 class VTKDataLoader:
     """
@@ -358,164 +355,207 @@ class BiotCoupled2DData:
         return total_loss
 
 
-class BiotCoupledDataTrainer:
+class BiotCoupledDataTrainer(BiotCoupledTrainer):
     """
-    Trainer for 2D Biot poroelasticity with experimental data integration.
+    Data-enhanced trainer for 2D Biot poroelasticity.
     
-    This class combines the base Biot physics with experimental data constraints.
+    This trainer extends the base BiotCoupledTrainer to incorporate experimental data
+    from VTK files into the training process.
     """
     
     def __init__(self, 
-                 data_problem: BiotCoupled2DData,
-                 base_problem: BiotCoupled2D,
-                 domain_batch_size: int = 1000,
-                 boundary_batch_size: int = 100,
-                 data_batch_size: int = 50):
+                 data_dir: str = "Data_2D",
+                 data_weight: float = 1.0,
+                 data_batch_size: int = 32,
+                 use_data_conditions: Optional[List[str]] = None,
+                 w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True):
         """
         Initialize the data-enhanced trainer.
         
         Args:
-            data_problem: BiotCoupled2DData problem instance with experimental data
-            base_problem: Base BiotCoupled2D problem for physics constraints
-            domain_batch_size: Batch size for domain points
-            boundary_batch_size: Batch size for boundary points  
-            data_batch_size: Batch size for data points
+            data_dir: Directory containing VTK data files
+            data_weight: Weight for data loss term
+            data_batch_size: Batch size for data sampling
+            use_data_conditions: List of conditions to use (if None, use all available)
+            w_mech: Base weight for mechanics equation
+            w_flow: Base weight for flow equation
+            w_bc: Base weight for boundary conditions
+            auto_balance: Whether to use automatic loss balancing
         """
-        self.data_problem = data_problem
-        self.base_problem = base_problem
-        self.domain_batch_size = domain_batch_size
-        self.boundary_batch_size = boundary_batch_size
+        # Initialize base trainer
+        super().__init__(w_mech, w_flow, w_bc, auto_balance)
+        
+        self.data_weight = data_weight
         self.data_batch_size = data_batch_size
         
-    def loss_fn(self, params, subdomain_xs, key):
+        # Initialize VTK data loader
+        self.data_loader = VTKDataLoader(data_dir)
+        self.experimental_data = None
+        self.use_data_conditions = use_data_conditions
+        
+        # Load experimental data
+        self._load_experimental_data()
+        
+    def _load_experimental_data(self):
+        """Load and process experimental VTK data"""
+        try:
+            self.experimental_data = self.data_loader.load_experimental_data()
+            print(f"Loaded experimental data: {list(self.experimental_data.keys())}")
+            
+            # Filter by conditions if specified
+            if self.use_data_conditions:
+                filtered_data = {}
+                for data_type in self.experimental_data:
+                    filtered_data[data_type] = {}
+                    for condition in self.experimental_data[data_type]:
+                        if condition in self.use_data_conditions:
+                            filtered_data[data_type][condition] = self.experimental_data[data_type][condition]
+                self.experimental_data = filtered_data
+                print(f"Filtered to conditions: {self.use_data_conditions}")
+                
+        except Exception as e:
+            print(f"Warning: Could not load experimental data: {e}")
+            self.experimental_data = None
+    
+    def _sample_data_points(self, key, batch_size):
+        """Sample random points from experimental data"""
+        if self.experimental_data is None:
+            return None
+            
+        sampled_data = {}
+        
+        for data_type in self.experimental_data:
+            sampled_data[data_type] = {}
+            for condition in self.experimental_data[data_type]:
+                data = self.experimental_data[data_type][condition]
+                coords = data["coordinates"][:, :2]  # Extract x, y coordinates
+                values = data["data"]
+                
+                # Sample random indices
+                n_points = min(batch_size, len(coords))
+                indices = jax.random.choice(key, len(coords), shape=(n_points,), replace=False)
+                
+                sampled_coords = coords[indices]
+                sampled_values = values[indices] if values.ndim > 1 else values[indices]
+                
+                sampled_data[data_type][condition] = {
+                    "coordinates": jnp.array(sampled_coords),
+                    "values": jnp.array(sampled_values),
+                    "n_points": n_points
+                }
+                
+        return sampled_data
+    
+    def _compute_data_loss(self, all_params, sampled_data):
+        """Compute loss against experimental data"""
+        if sampled_data is None:
+            return 0.0
+            
+        total_data_loss = 0.0
+        
+        for data_type in sampled_data:
+            for condition in sampled_data[data_type]:
+                data = sampled_data[data_type][condition]
+                if data["n_points"] == 0:
+                    continue
+                    
+                coords = data["coordinates"]
+                target_values = data["values"]
+                
+                # Get network predictions at data coordinates
+                predictions = self.predict(coords)
+                
+                if data_type == "displacement":
+                    # Compare displacement components (first 2 outputs)
+                    pred_displacement = predictions[:, :2]
+                    if target_values.shape[1] >= 2:  # Has x,y components
+                        target_displacement = target_values[:, :2]
+                        displacement_loss = jnp.mean((pred_displacement - target_displacement)**2)
+                        total_data_loss += displacement_loss
+                        
+                elif data_type == "pressure":
+                    # Compare pressure (third output)
+                    pred_pressure = predictions[:, 2]
+                    if target_values.ndim == 1:  # Scalar pressure
+                        pressure_loss = jnp.mean((pred_pressure - target_values)**2)
+                        total_data_loss += pressure_loss
+                        
+        return total_data_loss
+    
+    def train_with_data(self, n_steps=1000, data_schedule=None):
         """
-        Enhanced loss function including experimental data terms.
+        Train with experimental data integration.
         
         Args:
-            params: Neural network parameters
-            subdomain_xs: Domain points for each subdomain
-            key: JAX random key
-            
-        Returns:
-            Total loss and loss components
+            n_steps: Number of training steps
+            data_schedule: Schedule for data weight (if None, use constant weight)
         """
-        # This is a placeholder implementation
-        # In a real implementation, we would:
-        # 1. Evaluate physics loss from base_problem
-        # 2. Evaluate boundary conditions
-        # 3. Add experimental data loss
-        
-        # Sample data points
-        data_key, _ = jax.random.split(key)
-        sampled_data = self.data_problem.sample_data_points(data_key, self.data_batch_size)
-        
-        # Placeholder for combined loss
-        total_loss = 0.0
-        loss_dict = {"physics_loss": 0.0, "boundary_loss": 0.0, "data_loss": 0.0}
-        
-        # Add data loss if we have sampled data
-        if sampled_data:
-            # For now, just compute a dummy data loss
-            data_loss = 0.0
-            for data_type in sampled_data:
-                for condition in sampled_data[data_type]:
-                    data = sampled_data[data_type][condition]
-                    if data["n_points"] > 0:
-                        # Dummy loss - in practice would evaluate network predictions
-                        data_loss += 1.0
+        if self.experimental_data is None:
+            print("No experimental data available, falling back to physics-only training")
+            return self.train_coupled(n_steps)
             
-            loss_dict["data_loss"] = data_loss
-            total_loss += data_loss
+        print(f"Training with experimental data integration (weight: {self.data_weight})")
         
-        return total_loss, loss_dict
-    
-    def _predict_at_points(self, params, coords):
-        """
-        Predict displacement and pressure at given coordinates.
+        # Create data-enhanced loss function
+        original_loss_fn = BiotCoupled2D.loss_fn
         
-        Args:
-            params: Neural network parameters
-            coords: Coordinates to evaluate at (n_points, 2)
+        def data_enhanced_loss_fn(all_params, constraints, w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True):
+            # Compute physics loss
+            physics_loss = original_loss_fn(all_params, constraints, w_mech, w_flow, w_bc, auto_balance)
             
-        Returns:
-            Tuple of (displacement, pressure) predictions
-        """
-        # This is a placeholder - actual implementation depends on network architecture
-        # For now, return dummy predictions with correct shapes
-        n_points = coords.shape[0]
-        u_pred = jnp.zeros((n_points, 2))  # 2D displacement
-        p_pred = jnp.zeros((n_points,))    # Scalar pressure
+            # Sample and compute data loss
+            key = jax.random.PRNGKey(all_params.get("step", 0))
+            sampled_data = self._sample_data_points(key, self.data_batch_size)
+            data_loss = self._compute_data_loss(all_params, sampled_data)
+            
+            # Apply data weight schedule if provided
+            current_data_weight = self.data_weight
+            if data_schedule is not None:
+                step = all_params.get("step", 0)
+                if step < len(data_schedule):
+                    current_data_weight = data_schedule[step] * self.data_weight
+            
+            total_loss = physics_loss + current_data_weight * data_loss
+            
+            # Print loss components occasionally
+            def _print_data_losses(step_val):
+                jax.debug.print("Step {}: Physics: {:.2e}, Data: {:.2e} (weight: {:.2e})", 
+                                step_val, physics_loss, data_loss, current_data_weight)
+                return 0
+                
+            step = all_params.get("step", 0)
+            jax.lax.cond(step % 100 == 0, lambda _: _print_data_losses(step), lambda _: 0, None)
+            
+            return total_loss
         
-        # TODO: Implement actual network evaluation
-        # This would typically involve:
-        # 1. Forward pass through the network at coords
-        # 2. Extract displacement and pressure components
-        # 3. Return properly shaped predictions
+        # Replace loss function temporarily
+        BiotCoupled2D.loss_fn = data_enhanced_loss_fn
         
-        return u_pred, p_pred
+        # Train with data-enhanced loss
+        try:
+            params = self._train_with_weights(n_steps, self.w_mech, self.w_flow, self.w_bc)
+        finally:
+            # Restore original loss function
+            BiotCoupled2D.loss_fn = original_loss_fn
+            
+        return params
 
 
-def main():
+def DataEnhancedTrainer(data_dir="Data_2D", data_weight=1.0, use_data_conditions=None):
     """
-    Demonstration of the data-enhanced Biot trainer.
+    Create a data-enhanced trainer with experimental data integration.
+    
+    Args:
+        data_dir: Directory containing VTK files
+        data_weight: Weight for data loss term
+        use_data_conditions: List of conditions to use (if None, use all available)
+    
+    Returns:
+        BiotCoupledDataTrainer instance
     """
-    # Define domain (adjust based on experimental data range)
-    domain = ((-2000, 2000), (-3300, 0))  # (x_range, y_range) in meters
-    
-    # Material parameters for poroelasticity
-    material_params = {
-        'E': 15e9,      # Young's modulus (Pa)
-        'nu': 0.25,     # Poisson's ratio
-        'alpha': 0.9,   # Biot's coefficient
-        'k': 1e-14,     # Permeability (m^2)
-        'mu': 1e-3,     # Fluid viscosity (Pa·s)
-        'rho_s': 2700,  # Solid density (kg/m^3)
-        'rho_f': 1000,  # Fluid density (kg/m^3)
-    }
-    
-    try:
-        # Create data-enhanced problem
-        print("Creating data-enhanced Biot problem...")
-        data_problem = BiotCoupled2DData(
-            domain=domain,
-            material_params=material_params,
-            data_dir="Data_2D",
-            data_weight=1.0,
-            use_data_conditions=["initial", "loaded_MHm"]
-        )
-        
-        # Create base problem for physics (would need actual BiotCoupled2D instantiation)
-        print("Creating base physics problem...")
-        # base_problem = BiotCoupled2D(domain, material_params)  # This would need proper setup
-        base_problem = None  # Placeholder for now
-        
-        # Create trainer
-        print("Creating data-enhanced trainer...")
-        trainer = BiotCoupledDataTrainer(
-            data_problem=data_problem,
-            base_problem=base_problem,
-            domain_batch_size=500,
-            boundary_batch_size=50,
-            data_batch_size=30
-        )
-        
-        print("Data-enhanced Biot trainer created successfully!")
-        print(f"Available data types: {list(data_problem.experimental_data.keys())}")
-        
-        for data_type in data_problem.experimental_data:
-            print(f"\n{data_type.capitalize()} data:")
-            for condition in data_problem.experimental_data[data_type]:
-                n_points = data_problem.data_points[data_type][condition]["n_points"]
-                print(f"  {condition}: {n_points} points")
-        
-    except Exception as e:
-        print(f"Error creating data-enhanced trainer: {e}")
-        print("\nMake sure the VTK data files are in the Data_2D directory:")
-        print("- displacement_MSAMPLE2D_RES_S0_M.vtk")
-        print("- displacement_MSAMPLE2D_RES_S100_MHm.vtk")
-        print("- matrix_pressure_MSAMPLE2D_RES_S100_Hm.vtk")
-        print("- matrix_pressure_MSAMPLE2D_RES_S100_MHm.vtk")
-
-
-if __name__ == "__main__":
-    main()
+    return BiotCoupledDataTrainer(
+        data_dir=data_dir,
+        data_weight=data_weight, 
+        use_data_conditions=use_data_conditions,
+        auto_balance=True
+    )

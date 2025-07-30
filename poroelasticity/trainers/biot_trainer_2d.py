@@ -30,16 +30,16 @@ class BiotCoupled2D(Problem):
         k = jnp.array(k, dtype=jnp.float32)
         mu = jnp.array(mu, dtype=jnp.float32)
         
-        # Reference values for non-dimensionalization
+        # Reference values for non dimensionalization
         E_ref = jnp.array(5000.0, dtype=jnp.float32)
         k_ref = jnp.array(1.0, dtype=jnp.float32)
         
-        # Non-dimensionalize the parameters for numerical stability
+        # Non dimensionalize the parameters for numerical stability
         E_ref = 5000.0
         k_ref = 1.0
         
         E_norm = E / E_ref
-        #k_norm = k / k_ref
+        #k_norm = k / k_ref # Used only the k value for normalization in the loss function
 
         # Calculate the derived parameters using normalized Young's modulus
         G = E_norm * E_ref / (2.0 * (1.0 + nu))
@@ -68,13 +68,13 @@ class BiotCoupled2D(Problem):
         """Sample constraints for both mechanics and flow equations"""
 
         dom = all_params["static"].setdefault("domain", {})
-        # assume 2‑D unit square if not provided
+        # assume 2D unit square if not provided
         d = all_params["static"]["problem"]["dims"][1]
         dom.setdefault("xmin", jnp.zeros((d,), dtype=jnp.float32))
         dom.setdefault("xmax", jnp.ones((d,),  dtype=jnp.float32))
         dom.setdefault("xd", d)
 
-        # hack: if they asked for a 1‑tuple grid in 2D, just pad it to (N,N)
+        # NB: if the model asks for a 1 tuple grid in 2D, just pad it to (N,N)
         bs0 = batch_shapes[0]
         if sampler == "grid" and len(bs0) == 1 and d > 1:
             batch_shape_phys = (bs0[0],) * d
@@ -104,7 +104,7 @@ class BiotCoupled2D(Problem):
             (2, (1,1))
         ) 
         
-        # Sampling the Boundary constraints - use provided batch_shapes
+        # Sampling the Boundary constraints : use provided batch_shapes
         boundary_batch_shapes = batch_shapes[1:5]  # Skip interior (index 0)
         x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
@@ -160,7 +160,7 @@ class BiotCoupled2D(Problem):
         alpha = all_params["static"]["problem"]["alpha"]
         k = all_params["static"]["problem"]["k"]
 
-        # Physics constraints - unpack x_batch and derivatives
+        # Physics constraints: unpack x_batch and derivatives
         # The framework adds derivatives after required_ujs based on the order specified
         x_batch_phys = constraints[0][0]
         # Derivatives in order of required_ujs_mech:
@@ -193,7 +193,7 @@ class BiotCoupled2D(Problem):
         # Flow equation: -k∇²p + α∇·u = 0
         laplacian_p = d2pdx2 + d2pdy2
         # Normalized permeability for better numerical stability
-        #k_norm = k / all_params["static"]["problem"].get("k_ref", 1.0) # what is k actually normalized by?
+        #k_norm = k / all_params["static"]["problem"].get("k_ref", 1.0) (k norm wasnt used here because its the same value as k)
         flow_residual = -k * laplacian_p + alpha * div_u
         flow_loss = jnp.mean(flow_residual**2)
 
@@ -267,18 +267,6 @@ class BiotCoupled2D(Problem):
             
         def _no_op(_):
             return 0
-        
-        # Print if step is available and divisible by 10 (disabled during tracing)
-        # step_exists = jnp.array("step" in all_params, dtype=jnp.bool_)
-        # if step_exists:
-        #     step = all_params["step"] 
-        #     should_print = jnp.logical_and(step_exists, step % 10 == 0)
-        #     jax.lax.cond(
-        #         should_print,
-        #         lambda _: _print_losses(step),
-        #         lambda _: _no_op(0),
-        #         operand=0
-        #     )
         
         if auto_balance:
             # Automatic loss balancing
@@ -383,88 +371,8 @@ class BiotCoupled2D(Problem):
 
         return jnp.hstack([ux, uy, p])
 
-        
-    # @staticmethod
-    # def exact_solution(all_params, x_batch, batch_shape=None):
-    #     """
-    #     Mandel-inspired analytical solution for Biot poroelasticity
-    #     This solution approximately satisfies the governing equations
-    #     """
-    #     x = x_batch[:, 0]
-    #     y = x_batch[:, 1]
-        
-    #     # Material parameters
-    #     alpha = all_params["static"]["problem"]["alpha"] 
-    #     k = all_params["static"]["problem"]["k"]
-    #     #G = all_params["static"]["problem"]["G"]
-    #     #lam = all_params["static"]["problem"]["lam"]
-    #     #nu = all_params["static"]["problem"]["nu"]
-        
-    #     # Domain parameters
-    #     #a = 1.0  # Domain width
-    #     #b = 1.0  # Domain height
-        
-    #     # Mandel problem parameters
-    #     # Pressure field: satisfies flow equation with proper boundary conditions
-    #     p0 = 1.0
-    #     beta = 1.0  # Decay parameter
-        
-    #     # Pressure field with boundary conditions (wedge in y)
-    #     #p = p0 * jnp.exp(-beta*x) * (1 - y/b)  # p=1 at x=0, p=0 at x=1, ∂p/∂y=0 at y=0,1
-
-    #     # Simple x‐decay Dirichlet: p=1 at x=0, p→0 at x=1, (flat in y)
-    #     p = p0 * jnp.exp( -beta * x)
-
-    #     # Pressure derivatives
-    #     #dpdx = -beta * p0 * jnp.exp(-beta*x) * (1 - y/b)
-    #     #dpdy = -p0 * jnp.exp(-beta*x) / b
-
-    #     d2pdx2 = beta**2 * p0 * jnp.exp(-beta*x) 
-    #     d2pdy2 = jnp.zeros_like(x)  # d²p/dy² = 0 for linear y dependence
-        
-    #     # From flow equation: -k∇²p + α∇·u = 0
-    #     # ∇·u = (k/α) * ∇²p = (k/α) * (d²p/dx² + d²p/dy²)
-    #     laplacian_p = d2pdx2 + d2pdy2
-    #     div_u_target = (k/alpha) * laplacian_p
-
-    #     # Using a displacement field that satisfies the divergence constraint and boundary conditions:
-
-    #     # For u_x: u_x = 0 at x=0, ∂u_x/∂x = 0 at x=1
-    #     A1 = 1e-4  # amplitude 
-    #     # Using (1 - jnp.exp(-x)) ensures ∂u_x/∂x -> 0 as x -> 1
-    #     u_x = A1 * (1 - jnp.exp(-3*x)) * (k/alpha) * beta * p0 
-    #     duxdx = A1 * 3 * jnp.exp(-3 * x) * (k/alpha) * beta * p0
-    #     duxdx = jnp.where(x < 1e-4, 0.0, duxdx)  # Ensure u_x=0 at x=0
-
-    #     #A1 * (2 - 2*x) * (k/alpha) * beta**2 * p0 * jnp.exp(-beta*x) / 2 + \
-    #             #A1 * x * (2 - x) * (k/alpha) * beta**2 * p0 * (-beta) * jnp.exp(-beta*x) / 2
-        
-    #     # For u_y: u_y starts at zero and gets tiny corrections to match divergence 
-    #     u_y = jnp.zeros_like(x)
-    #     duydy = jnp.zeros_like(x)
-    #     div_u_actual = duxdx + duydy  # Actual divergence of the displacement field
-        
-
-    #     # A2 = 1e-4  # amplitude
-    #     # u_y = A2 * y * jnp.sin(jnp.pi*x/a) * 0.1
-    #     # u_y = 0.0
-    #     # displacement gradients
-    #     # duydy = A2 * (1 - 2*y/b) * jnp.sin(jnp.pi*x/a) * 0.1
-    #     # duydx = #A2 * y * jnp.pi/a * jnp.cos(jnp.pi*x/a) * 0.1
-    #     # duydx = jnp.where(x < 1e-4, 0.0, duydx)  # Ensure u_y=0 at x=0
-
-    #     # Divergence to match target
-    #     # div_u_target = (k/alpha) * (d2pdx2 + d2pdy2)
-    #     # Compute the actual divergence of the displacement field
-        
-    #     # Apply correction to u_y to improve divergence matching
-    #     correction = (div_u_target - div_u_actual) * y * (1 - y) * 0.5  # Small correction factor
-    #     u_y += x * correction
-        
-    #     return jnp.column_stack([u_x, u_y, p])
-
 class BiotCoupledTrainer:
-    """Trainer class for the unified Biot problem with pre-training and gradual coupling"""
+    """Trainer class for the unified Biot problem with pre training and gradual coupling"""
     
     def __init__(self, w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True):
         """
@@ -511,13 +419,13 @@ class BiotCoupledTrainer:
         self.all_params = None
     
     def train_mechanics_only(self, n_steps=100):
-        """Pre-train mechanics only (sets flow weight to 0)"""
-        print("Pre-training mechanics only")
+        """Pre train mechanics only (sets flow weight to 0)"""
+        print("Pre training mechanics only")
         return self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=0.0, w_bc=self.w_bc)
     
     def train_flow_only(self, n_steps=100):
-        """Pre-train flow only (sets mechanics weight to 0)"""
-        print("Pre-training flow only")
+        """Pre train flow only (sets mechanics weight to 0)"""
+        print("Pre training flow only")
         return self._train_with_weights(n_steps, w_mech=0.0, w_flow=self.w_flow, w_bc=self.w_bc)
     
     def train_coupled(self, n_steps=100):
@@ -529,9 +437,9 @@ class BiotCoupledTrainer:
         """
         Gradual coupling with automatic loss balancing
         """
-        print(" Gradual coupling with auto balancing ")
-        
-        # Step 1: Train mechanics only (disable auto-balance for single equation)
+        print(" Gradual coupling with auto balance ")
+
+        # Step 1: Train mechanics only (disable auto balance for single equation)
         old_auto_balance = self.auto_balance
         self.auto_balance = False
         self.train_mechanics_only(n_steps_pre)
@@ -539,10 +447,10 @@ class BiotCoupledTrainer:
         # Step 2: Train flow only  
         self.train_flow_only(n_steps_pre)
         
-        # Step 3: Use auto-balancing for coupled training
+        # Step 3: Use auto balancing for coupled training
         self.auto_balance = True
         
-        # Gradually increasing coupling with auto-balancing
+        # Gradually increasing coupling with auto balancing
         coupling_schedule = [0.1, 0.3, 0.5, 0.8, 1.0]
         for i, coupling_strength in enumerate(coupling_schedule):
             print(f"Coupling step {i+1}/5: strength = {coupling_strength} (auto-balanced)")
@@ -550,10 +458,10 @@ class BiotCoupledTrainer:
             w_flow_scaled = coupling_strength * self.w_flow
             self._train_with_weights(n_steps_coupled//5, w_mech_scaled, w_flow_scaled, self.w_bc)
         
-        # Restore original auto-balancing setting
+        # Restore original auto balancing setting
         self.auto_balance = old_auto_balance
         
-        print(" Gradual coupling with auto-balancing completed ")
+        print(" Gradual coupling with auto balancing completed ")
         return self.all_params
     
     def _train_with_weights(self, n_steps, w_mech, w_flow, w_bc):
@@ -562,7 +470,7 @@ class BiotCoupledTrainer:
         problem_class = self.trainer.c.problem
         original_loss_fn = problem_class.loss_fn
         
-        # Weighted loss function with auto-balancing
+        # Weighted loss function with auto balancing
         def weighted_loss_fn(all_params, constraints):
             return original_loss_fn(all_params, constraints, w_mech, w_flow, w_bc, self.auto_balance)
         

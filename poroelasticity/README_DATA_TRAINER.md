@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-Successfully created a comprehensive data-enhanced physics-informed neural network (PINN) trainer for 2D Biot poroelasticity problems. This system integrates experimental VTK data with physics-based constraints for improved accuracy and validation.
+Successfully created a comprehensive data enhanced physics-informed neural network (PINN) trainer for 2D Biot poroelasticity problems. This system integrates experimental VTK data with physics based constraints for improved accuracy and validation.
 
 ## Completed Components
 
 ### 1. Core Files Created
-- **`biot_trainer_data.py`**: Main data-enhanced trainer implementation
+- **`biot_trainer_data.py`**: Main data enhanced trainer implementation
 - **`test_vtk_data.py`**: Standalone VTK data loading tests
 - **`test_data_trainer.py`**: Comprehensive trainer validation tests
 - **`example_data_trainer.py`**: Complete demonstration and usage example
