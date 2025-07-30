@@ -5,7 +5,7 @@
 ### Step 1: Clone the Repository
 ```python
 # In a Colab cell:
-!git clone https://github.com/your-username/FBPINNs.git
+!git clone https://github.com/thiae/FBPINNs.git
 %cd FBPINNs
 ```
 
@@ -39,9 +39,8 @@ print("✅ FBPINNs installed successfully")
 # Run comprehensive validation (includes structure check + physics validation)
 !python run_all_validations.py --quick
 
-# Or run specific validations
+# Or run specific validation
 !python validation_scripts/validate_2d_physics.py --quick
-!python validation_scripts/validate_2d_data.py --quick
 ```
 
 #### Option C: Run Individual Trainers (Quick Testing)
