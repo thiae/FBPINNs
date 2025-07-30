@@ -104,8 +104,8 @@ class BiotCoupled2D(Problem):
             (2, (1,1))
         ) 
         
-        # Sampling the Boundary constraints
-        boundary_batch_shapes = ((25,), (25,), (25,), (25,))
+        # Sampling the Boundary constraints - use provided batch_shapes
+        boundary_batch_shapes = batch_shapes[1:5]  # Skip interior (index 0)
         x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
         # LEFT BOUNDARY
@@ -160,11 +160,12 @@ class BiotCoupled2D(Problem):
         alpha = all_params["static"]["problem"]["alpha"]
         k = all_params["static"]["problem"]["k"]
 
-        # Physics constraints - unpack all derivatives
-        (x_batch_phys,
-        duxdx, d2uxdx2,d2uxdy2,d2uxdxdy,
-        duydy, d2uydx2, d2uydy2, d2uydxdy,
-        dpdx, dpdy, d2pdx2, d2pdy2) = constraints[0]
+        # Physics constraints - unpack x_batch and derivatives
+        # The framework adds derivatives after required_ujs based on the order specified
+        x_batch_phys = constraints[0][0]
+        # Derivatives in order of required_ujs_mech:
+        # (0,(0,)), (0,(0,0)), (0,(1,1)), (0,(0,1)), (1,(1,)), (1,(0,0)), (1,(1,1)), (1,(0,1)), (2,(0,)), (2,(1,)), (2,(0,0)), (2,(1,1))
+        duxdx, d2uxdx2, d2uxdy2, d2uxdxdy, duydy, d2uydx2, d2uydy2, d2uydxdy, dpdx, dpdy, d2pdx2, d2pdy2 = constraints[0][1:13]
         
         # MECHANICS RESIDUAL
         # Compute divergence of displacement: ∇·u = ∂u_x/∂x + ∂u_y/∂y
@@ -267,17 +268,17 @@ class BiotCoupled2D(Problem):
         def _no_op(_):
             return 0
         
-        # Print if step is available and divisible by 10
-        step_exists = jnp.array("step" in all_params, dtype=jnp.bool_)
-        if step_exists:
-            step = all_params["step"] 
-            should_print = jnp.logical_and(step_exists, step % 10 == 0)
-            jax.lax.cond(
-                should_print,
-                lambda _: _print_losses(step),
-                lambda _: _no_op(0),
-                operand=0
-            )
+        # Print if step is available and divisible by 10 (disabled during tracing)
+        # step_exists = jnp.array("step" in all_params, dtype=jnp.bool_)
+        # if step_exists:
+        #     step = all_params["step"] 
+        #     should_print = jnp.logical_and(step_exists, step % 10 == 0)
+        #     jax.lax.cond(
+        #         should_print,
+        #         lambda _: _print_losses(step),
+        #         lambda _: _no_op(0),
+        #         operand=0
+        #     )
         
         if auto_balance:
             # Automatic loss balancing

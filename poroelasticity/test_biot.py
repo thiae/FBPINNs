@@ -19,6 +19,7 @@ def mock_problem():
     
     key = jax.random.PRNGKey(0)
     # Define batch shapes: 10 interior points, 5 per boundary
+    # Note: grid sampler converts (10,) to (10,10) in 2D, so we get 100 points
     shapes = ((10,), (5,), (5,), (5,), (5,))
     # Sample constraints
     constraints = BiotCoupled2D.sample_constraints(
@@ -36,7 +37,7 @@ def test_sample_constraints_structure(mock_problem):
     assert len(interior_constraint) >= 2, "Interior should have at least x_batch and required_ujs"
     x_phys = interior_constraint[0] 
     assert isinstance(x_phys, jnp.ndarray)
-    assert x_phys.shape == (10, 2)
+    assert x_phys.shape == (100, 2)  # Grid sampler converts (10,) to (10,10) = 100 points
     
     # Left BC: x_batch + 3 targets + required_ujs -> framework adds derivatives  
     left_constraint = cons[1]
@@ -45,7 +46,30 @@ def test_sample_constraints_structure(mock_problem):
 
 def test_loss_fn_returns_scalar(mock_problem):
     all_params, cons = mock_problem
-    loss = BiotCoupled2D.loss_fn(all_params, cons)
+    
+    # Create mock processed constraints (as the framework would provide them)
+    # The framework would normally process required_ujs and add derivatives
+    x_batch_phys = cons[0][0]  # 100 x 2 points
+    n_points = x_batch_phys.shape[0]
+    
+    # Create mock derivatives (all zeros for simplicity)
+    mock_derivatives = [jnp.zeros((n_points, 1)) for _ in range(12)]
+    
+    # Create mock boundary constraints with proper structure
+    mock_boundary_cons = []
+    for i in range(1, 5):  # 4 boundary constraints
+        x_batch = cons[i][0]
+        n_pts = x_batch.shape[0]
+        # Add mock derivatives for each boundary constraint
+        mock_boundary_cons.append([x_batch] + [jnp.zeros((n_pts, 1)) for _ in range(10)])
+    
+    # Create properly structured constraints for loss function
+    processed_constraints = [
+        [x_batch_phys] + mock_derivatives,  # Interior
+        *mock_boundary_cons  # Boundaries
+    ]
+    
+    loss = BiotCoupled2D.loss_fn(all_params, processed_constraints)
     assert isinstance(loss, jnp.ndarray)
     assert loss.shape == (), "Loss must be a scalar"
 
