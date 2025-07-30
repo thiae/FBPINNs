@@ -10,12 +10,22 @@
 ```
 
 ### Step 2: Install Dependencies and FBPINNs
+
+**Cell 1 - Install packages (this may trigger a restart warning):**
 ```python
 # Install required packages
 !pip install jax[cpu] optax matplotlib seaborn
 
 # Install FBPINNs in editable mode (CRITICAL!)
 !pip install -e .
+```
+
+**⚠️ IMPORTANT: If Colab shows a "Restart session" warning, click "Restart session" button!**
+
+**Cell 2 - After restart, verify installation:**
+```python
+# Navigate back to the repo (after restart)
+%cd /content/FBPINNs
 
 # Verify installation
 import fbpinns
@@ -85,6 +95,28 @@ print("✅ FBPINNs installed successfully")
 - Check that all dependencies are installed
 - Try the `--quick` option for faster testing
 - Check the error messages in the output
+
+## 🔧 Troubleshooting Common Issues
+
+### "Restart session" Warning
+This is normal! Colab often requires a restart when installing new packages.
+1. Click **"Restart session"** when prompted
+2. Re-run the verification cell: `%cd /content/FBPINNs` and `import fbpinns`
+3. Continue with your chosen approach
+
+### Import Errors
+If you see `ModuleNotFoundError`:
+```python
+# Make sure you're in the right directory and re-install
+%cd /content/FBPINNs
+!pip install -e .
+```
+
+### Training Issues
+If training fails or gives strange results:
+- Try `--quick` flag first for faster debugging
+- Check GPU is enabled: `Runtime > Change runtime type > GPU`
+- Restart runtime and try again
 
 ## File Structure After Cloning
 ```
