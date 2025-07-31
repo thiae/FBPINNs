@@ -80,9 +80,8 @@ def main():
         if test_imports():
             print("\nSUCCESS: All required modules are now available!")
             print("\nYou can now run:")
-            print("  !python run_all_validations.py --quick")
             print("  !python test/test_biot_2d.py")
-            print("  !python validation_scripts/validate_2d_physics.py --quick")
+            print("  !python simple_validation.py")
         else:
             print("\nERROR: Some imports failed. Check the errors above.")
     else:

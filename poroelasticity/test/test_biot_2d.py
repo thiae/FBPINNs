@@ -8,8 +8,12 @@ import jax.numpy as jnp
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
+# Also add the poroelasticity directory to find trainers
+poroelasticity_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, poroelasticity_dir)
+
 from fbpinns.domains import RectangularDomainND
-from trainers.biot_trainer_2d import BiotCoupled2D, CoupledTrainer  
+from trainers.biot_trainer_2d import BiotCoupled2D, BiotCoupledTrainer  
 
 @pytest.fixture
 def mock_problem():
@@ -79,7 +83,7 @@ def test_loss_fn_returns_scalar(mock_problem):
     assert loss.shape == (), "Loss must be a scalar"
 
 def test_mini_training_run():
-    trainer = CoupledTrainer()
+    trainer = BiotCoupledTrainer()
      # Pre train mechanics only
     trainer.auto_balance = False
     trainer.train_mechanics_only(n_steps=10)
