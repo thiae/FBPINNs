@@ -1,4 +1,4 @@
-# Finite basis physics-informed neural networks (FBPINNs)
+                                                            # Finite basis physics-informed neural networks (FBPINNs)
 
 ---
 
