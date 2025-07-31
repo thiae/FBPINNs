@@ -138,7 +138,7 @@ def check_jax_gpu():
         devices = jax.devices()
         print(f"JAX devices: {devices}")
         
-        gpu_devices = [d for d in devices if d.device_kind == 'gpu']
+        gpu_devices = [d for d in devices if 'gpu' in str(d).lower() or 'cuda' in str(d).lower()]
         if gpu_devices:
             print(f"GPU available: {gpu_devices}")
         else:

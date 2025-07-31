@@ -58,23 +58,26 @@ def test_simple_problem():
     print("Testing problem setup...")
     
     try:
+        import numpy as np
         from fbpinns.domains import RectangularDomainND
         from fbpinns.problems import HarmonicOscillator1D
         from fbpinns.decompositions import RectangularDecompositionND
         from fbpinns.networks import FCN
         from fbpinns.constants import Constants
         
-        # Create a simple 1D domain
-        domain = RectangularDomainND([0.0], [1.0])
+        # Create a simple 1D domain with proper arguments
+        domain = RectangularDomainND(xmin=np.array([0.0]), xmax=np.array([1.0]))
         print("  SUCCESS: Domain created")
         
-        # Create a simple problem
+        # Create a simple problem with proper arguments
         c = Constants()
-        problem = HarmonicOscillator1D(c=c)
+        problem = HarmonicOscillator1D(c=c, d=1, w0=10)
         print("  SUCCESS: Problem created")
         
-        # Create network
-        network = FCN(key=None, layer_sizes=[1, 10, 1])
+        # Create network with proper key
+        import jax.random as random
+        key = random.PRNGKey(0)
+        network = FCN(key=key, layer_sizes=[1, 10, 1])
         print("  SUCCESS: Network created")
         
         print("  SUCCESS: All components initialized successfully")
@@ -121,7 +124,7 @@ def check_gpu():
         import jax
         devices = jax.devices()
         
-        gpu_devices = [d for d in devices if d.device_kind == 'gpu']
+        gpu_devices = [d for d in devices if 'gpu' in str(d).lower() or 'cuda' in str(d).lower()]
         if gpu_devices:
             print(f"  SUCCESS: GPU available: {gpu_devices}")
             return True
