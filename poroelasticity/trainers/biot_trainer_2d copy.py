@@ -346,44 +346,30 @@ class BiotCoupled2D(Problem):
     
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape=None):
-        """
-        CORRECTED exact solution that satisfies ALL boundary conditions
-        
-        Previous solution was too simple and didn't satisfy traction-free BCs.
-        This version is designed to satisfy:
-        - Left (x=0): u_x=0, u_y=0, p=1  
-        - Right (x=1): p=0, traction-free σ·n=0
-        - Bottom (y=0): u_y=0, ∂p/∂y=0
-        - Top (y=1): traction-free σ·n=0, ∂p/∂y=0
-        """
         # unpack coords
         x = x_batch[:, 0]
         y = x_batch[:, 1]
 
-        # PRESSURE: Linear in x, constant in y to satisfy ∂p/∂y=0 at boundaries
-        # p(0,y) = 1, p(1,y) = 0, ∂p/∂y = 0 everywhere
-        p = 1.0 - x  # Simple linear pressure field
-        p = p.reshape(-1, 1)
+        # material
+        nu    = all_params["static"]["problem"]["nu"]
+        mu    = all_params["static"]["problem"]["mu"]
 
-        # DISPLACEMENT: Designed to satisfy all boundary conditions
-        # For u_x: Must be 0 at x=0, and satisfy traction conditions
-        # Use: u_x = x * f(x,y) where f is chosen to satisfy traction BCs
-        
-        # material parameters for scaling
-        nu = all_params["static"]["problem"]["nu"]
-        
-        # Scale displacements to be physically reasonable
-        disp_scale = 0.01 * nu / (1.0 + nu)
-        
-        # u_x: Zero at x=0, small quadratic variation
-        u_x = disp_scale * x * (2.0 - x) * (1.0 + 0.1 * y * (1.0 - y))
-        u_x = u_x.reshape(-1, 1)
+        # domain size
+        a = 1.0
+        # choose F so that p(0)=1 exactly
+        F = 3.0 * (1.0 + nu) * a
 
-        # u_y: Zero at x=0 and y=0, small variation elsewhere  
-        u_y = disp_scale * 0.5 * x * y * (1.0 - x) * (1.0 - y)
-        u_y = u_y.reshape(-1, 1)
+        # pressure: 1 for x<1, 0 for x>=1
+        p  = F/(3.0*(1+nu)*a) * jnp.where(x < a, 1.0, 0.0).reshape(-1, 1)
 
-        return jnp.hstack([u_x, u_y, p])
+        # horizontal displacement: u_x(0)=0, linear to some constant at x=1
+        ux = (F * nu) / (2.0 * mu * a) * x
+        ux = ux.reshape(-1,1)
+
+        # vertical displacement zero everywhere
+        uy = jnp.zeros_like(ux)
+
+        return jnp.hstack([ux, uy, p])
 
 class BiotCoupledTrainer:
     """Trainer class for the unified Biot problem with pre training and gradual coupling"""
@@ -411,15 +397,13 @@ class BiotCoupledTrainer:
             problem_init_kwargs={'E': 5000.0, 'nu': 0.25, 'alpha': 0.8, 'k': 1.0, 'mu': 1.0},
             decomposition=RectangularDecompositionND,
             decomposition_init_kwargs={
-                # REDUCED SUBDOMAINS: 2x2 = 4 instead of 4x3 = 12
-                'subdomain_xs': [jnp.linspace(0, 1, 3), jnp.linspace(0, 1, 3)],  
-                'subdomain_ws': [0.6 * jnp.ones(3), 0.6 * jnp.ones(3)],  # Larger overlap
+                'subdomain_xs': [jnp.linspace(0, 1, 4), jnp.linspace(0, 1, 3)],
+                'subdomain_ws': [0.5 * jnp.ones(4), 0.7 * jnp.ones(3)],
                 'unnorm': (0., 1.)
             },
             network=FCN,
             network_init_kwargs={'layer_sizes': [2, 256, 256, 256, 256, 3], 'activation': 'swish'},  # 3 outputs
-            # BALANCED SAMPLING: Reduce interior/boundary imbalance
-            ns=((50, 50), (50,), (50,), (50,), (50,)),  # 2.5k interior vs 200 boundary (better ratio)
+            ns=((100, 100), (25,), (25,), (25,), (25,)),
             n_test=(15, 15),  # Test points for evaluation
             n_steps=5000,
             optimiser_kwargs={
