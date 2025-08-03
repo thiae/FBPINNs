@@ -387,18 +387,18 @@ class BiotCoupled2D(Problem):
         coeff_x = alpha / (2.0 * (2.0*G + lam))
         ux = coeff_x * x * (x - 1.0)
         
-        # For uy: From ∇·u = 0: ∂ux/∂x + ∂uy/∂y = 0
-        # ∂ux/∂x = α*(2x-1)/(2*(2G+λ))
-        # So: ∂uy/∂y = -α*(2x-1)/(2*(2G+λ))
+        # CRITICAL FIX: For uy, enforce ∇·u = 0 exactly
+        # From ∇·u = 0: ∂ux/∂x + ∂uy/∂y = 0
+        # ∂ux/∂x = coeff_x * (2x - 1)
+        # Therefore: ∂uy/∂y = -coeff_x * (2x - 1)
         #
-        # This suggests uy should depend on x, but we need uy(x,0) = 0
-        # Compromise: Use original form with adjusted coefficient to minimize residuals
-        # uy = A * y * (1-y) where A is chosen to approximately satisfy ∇·u ≈ 0
-        
-        # At domain center (x=0.5): ∂ux/∂x = 0, so we want ∂uy/∂y ≈ 0
-        # This happens when A is small, use A = coeff_x for consistency
-        coeff_y = coeff_x  # Same coefficient for symmetry
-        uy = coeff_y * y * (1.0 - y)
+        # Integrating: uy = -coeff_x * (2x - 1) * y + f(x)
+        # Apply BC: uy(x,0) = 0 → f(x) = 0
+        # Final: uy = -coeff_x * (2x - 1) * y
+        #
+        # This EXACTLY satisfies ∇·u = 0 everywhere!
+        # Note: This may not satisfy uy(x,1) = 0, but physics is now correct
+        uy = -coeff_x * (2.0 * x - 1.0) * y 
         
         # Reshape for consistency
         ux = ux.reshape(-1, 1)
