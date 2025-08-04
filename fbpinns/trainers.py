@@ -492,10 +492,18 @@ def _common_train_initialisation(c, key, all_params, problem, domain):
 
     # get exact solution if it exists
     logger.info("Computing exact solution..")
-    u_exact = problem.exact_solution(all_params=all_params, x_batch=x_batch_test, batch_shape=c.n_test)
-    logger.info("Computing done")
-    logger.debug("u_exact")
-    logger.debug(str_tensor(u_exact))
+    try:
+        u_exact = problem.exact_solution(all_params=all_params, x_batch=x_batch_test, batch_shape=c.n_test)
+        if u_exact is None:
+            logger.info("No exact solution provided - using physics-only training")
+            u_exact = None
+        else:
+            logger.info("Exact solution computed successfully")
+            logger.debug("u_exact")
+            logger.debug(str_tensor(u_exact))
+    except (NotImplementedError, AttributeError):
+        logger.info("No exact solution available - using physics-only training")
+        u_exact = None
 
     return (optimiser, all_opt_states, optimiser_fn, loss_fn, key,
             constraints_global, x_batch_global, constraint_offsets_global, constraint_fs_global, jmapss,
@@ -783,11 +791,16 @@ class FBPINNTrainer(_Trainer):
         else:
             us_test, ws_test, us_raw_test = us_test_, ws_test_, us_raw_test_
 
-        # get losses over test data
-        l1 = jnp.mean(jnp.abs(u_exact-u_test)).item()
-        l1n = l1 / u_exact.std().item()
-        u_test_losses.append([i, pstep, fstep, time.time()-start0, l1, l1n])
-        writer.add_scalar("loss/test/l1_istep", l1, i)
+        # get losses over test data (only if exact solution is available)
+        if u_exact is not None:
+            l1 = jnp.mean(jnp.abs(u_exact-u_test)).item()
+            l1n = l1 / u_exact.std().item()
+            u_test_losses.append([i, pstep, fstep, time.time()-start0, l1, l1n])
+            writer.add_scalar("loss/test/l1_istep", l1, i)
+        else:
+            # Physics-only training - no exact solution testing
+            u_test_losses.append([i, pstep, fstep, time.time()-start0, 0.0, 0.0])
+            logger.info(f"Physics-only test at step {i} - no exact solution comparison")
 
         # create figures
         if i % (c.test_freq * 5) == 0:
@@ -952,11 +965,16 @@ class PINNTrainer(_Trainer):
         # get PINN solution using test data
         u_test, u_raw_test = PINN_model_jit(all_params, x_batch_test, model_fns, verbose=False)
 
-        # get losses over test data
-        l1 = jnp.mean(jnp.abs(u_exact-u_test)).item()
-        l1n = l1 / u_exact.std().item()
-        u_test_losses.append([i, pstep, fstep, time.time()-start0, l1, l1n])
-        writer.add_scalar("loss/test/l1_istep", l1, i)
+        # get losses over test data (only if exact solution is available)
+        if u_exact is not None:
+            l1 = jnp.mean(jnp.abs(u_exact-u_test)).item()
+            l1n = l1 / u_exact.std().item()
+            u_test_losses.append([i, pstep, fstep, time.time()-start0, l1, l1n])
+            writer.add_scalar("loss/test/l1_istep", l1, i)
+        else:
+            # Physics-only training - no exact solution testing
+            u_test_losses.append([i, pstep, fstep, time.time()-start0, 0.0, 0.0])
+            logger.info(f"Physics-only test at step {i} - no exact solution comparison")
 
         # create figures
         if i % (c.test_freq * 5) == 0:

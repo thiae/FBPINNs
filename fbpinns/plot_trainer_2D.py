@@ -188,13 +188,21 @@ def plot_2D_FBPINN(x_batch_test, u_exact, u_test, us_test, ws_test, us_raw_test,
     xlim0 = x_batch_test.min(0), x_batch_test.max(0)
     
     # Determine number of output components
-    if u_exact.ndim == 2 and u_exact.shape[1] > 1:
+    if u_exact is not None and u_exact.ndim == 2 and u_exact.shape[1] > 1:
         n_outputs = u_exact.shape[1]
         output_names = [f"u{i}" for i in range(n_outputs)]
         if n_outputs == 2:
             output_names = ["ux", "uy"]  # Common for geomechanics
         elif n_outputs == 3:
             output_names = ["ux", "uy", "uz"]
+    elif u_test.ndim == 2 and u_test.shape[1] > 1:
+        # No exact solution - infer from test data
+        n_outputs = u_test.shape[1]
+        output_names = [f"u{i}" for i in range(n_outputs)]
+        if n_outputs == 2:
+            output_names = ["ux", "uy"]
+        elif n_outputs == 3:
+            output_names = ["ux", "uy", "p"]  # Common for your poroelasticity problem
     else:
         n_outputs = 1
         output_names = ["u"]
@@ -231,9 +239,12 @@ def plot_2D_FBPINN(x_batch_test, u_exact, u_test, us_test, ws_test, us_raw_test,
         comp_name = output_names[comp_idx]
         
         # Get limits for this component
-        ulim_exact = _get_component_limits(u_exact, comp_idx)
         ulim_test = _get_component_limits(u_test, comp_idx)
-        ulim = (min(ulim_exact[0], ulim_test[0]), max(ulim_exact[1], ulim_test[1]))
+        if u_exact is not None:
+            ulim_exact = _get_component_limits(u_exact, comp_idx)
+            ulim = (min(ulim_exact[0], ulim_test[0]), max(ulim_exact[1], ulim_test[1]))
+        else:
+            ulim = ulim_test
         
         # FBPINN solution
         plt.subplot(n_outputs + 2, 3, plot_idx)
@@ -241,22 +252,32 @@ def plot_2D_FBPINN(x_batch_test, u_exact, u_test, us_test, ws_test, us_raw_test,
         _plot_test_im(u_test, xlim0, ulim, n_test, output_idx=comp_idx)
         plot_idx += 1
         
-        # Ground truth
-        plt.subplot(n_outputs + 2, 3, plot_idx)
-        plt.title(f"[{i}] {comp_name} - Exact")
-        _plot_test_im(u_exact, xlim0, ulim, n_test, output_idx=comp_idx)
-        plot_idx += 1
-        
-        # Difference
-        plt.subplot(n_outputs + 2, 3, plot_idx)
-        plt.title(f"[{i}] {comp_name} - Error")
-        if u_exact.ndim == 2 and u_test.ndim == 2:
-            diff = u_exact[:, comp_idx:comp_idx+1] - u_test[:, comp_idx:comp_idx+1]
+        if u_exact is not None:
+            # Ground truth (only if exact solution exists)
+            plt.subplot(n_outputs + 2, 3, plot_idx)
+            plt.title(f"[{i}] {comp_name} - Exact")
+            _plot_test_im(u_exact, xlim0, ulim, n_test, output_idx=comp_idx)
+            plot_idx += 1
+            
+            # Difference (only if exact solution exists)
+            plt.subplot(n_outputs + 2, 3, plot_idx)
+            plt.title(f"[{i}] {comp_name} - Error")
+            if u_exact.ndim == 2 and u_test.ndim == 2:
+                diff = u_exact[:, comp_idx:comp_idx+1] - u_test[:, comp_idx:comp_idx+1]
+            else:
+                diff = u_exact - u_test
+            diff_lim = np.abs(diff).max()
+            _plot_test_im(diff, xlim0, (-diff_lim, diff_lim), n_test, output_idx=0)
+            plot_idx += 1
         else:
-            diff = u_exact - u_test
-        diff_lim = np.abs(diff).max()
-        _plot_test_im(diff, xlim0, (-diff_lim, diff_lim), n_test, output_idx=0)
-        plot_idx += 1
+            # Physics-only training - skip exact solution and error plots
+            plt.subplot(n_outputs + 2, 3, plot_idx)
+            plt.title(f"[{i}] {comp_name} - Physics Only")
+            plt.text(0.5, 0.5, "No exact solution\n(Physics-only training)", 
+                    ha='center', va='center', transform=plt.gca().transAxes, fontsize=12)
+            plt.gca().set_xticks([])
+            plt.gca().set_yticks([])
+            plot_idx += 2  # Skip both exact and error plots
 
     plt.tight_layout()
     return (("test", f),)
@@ -268,13 +289,21 @@ def plot_2D_PINN(x_batch_test, u_exact, u_test, u_raw_test, x_batch, all_params,
     xlim0 = x_batch.min(0), x_batch.max(0)
     
     # Determine number of output components
-    if u_exact.ndim == 2 and u_exact.shape[1] > 1:
+    if u_exact is not None and u_exact.ndim == 2 and u_exact.shape[1] > 1:
         n_outputs = u_exact.shape[1]
         output_names = [f"u{i}" for i in range(n_outputs)]
         if n_outputs == 2:
             output_names = ["ux", "uy"]
         elif n_outputs == 3:
             output_names = ["ux", "uy", "uz"]
+    elif u_test.ndim == 2 and u_test.shape[1] > 1:
+        # No exact solution - infer from test data
+        n_outputs = u_test.shape[1]
+        output_names = [f"u{i}" for i in range(n_outputs)]
+        if n_outputs == 2:
+            output_names = ["ux", "uy"]
+        elif n_outputs == 3:
+            output_names = ["ux", "uy", "p"]  # Common for your poroelasticity problem
     else:
         n_outputs = 1
         output_names = ["u"]
@@ -310,9 +339,12 @@ def plot_2D_PINN(x_batch_test, u_exact, u_test, u_raw_test, x_batch, all_params,
         comp_name = output_names[comp_idx]
         
         # Get limits for this component
-        ulim_exact = _get_component_limits(u_exact, comp_idx)
         ulim_test = _get_component_limits(u_test, comp_idx)
-        ulim = (min(ulim_exact[0], ulim_test[0]), max(ulim_exact[1], ulim_test[1]))
+        if u_exact is not None:
+            ulim_exact = _get_component_limits(u_exact, comp_idx)
+            ulim = (min(ulim_exact[0], ulim_test[0]), max(ulim_exact[1], ulim_test[1]))
+        else:
+            ulim = ulim_test
         
         # PINN solution
         plt.subplot(n_outputs + 2, 3, plot_idx)
@@ -320,22 +352,32 @@ def plot_2D_PINN(x_batch_test, u_exact, u_test, u_raw_test, x_batch, all_params,
         _plot_test_im(u_test, xlim0, ulim, n_test, output_idx=comp_idx)
         plot_idx += 1
         
-        # Ground truth
-        plt.subplot(n_outputs + 2, 3, plot_idx)
-        plt.title(f"[{i}] {comp_name} - Exact")
-        _plot_test_im(u_exact, xlim0, ulim, n_test, output_idx=comp_idx)
-        plot_idx += 1
-        
-        # Difference
-        plt.subplot(n_outputs + 2, 3, plot_idx)
-        plt.title(f"[{i}] {comp_name} - Error")
-        if u_exact.ndim == 2 and u_test.ndim == 2:
-            diff = u_exact[:, comp_idx:comp_idx+1] - u_test[:, comp_idx:comp_idx+1]
+        if u_exact is not None:
+            # Ground truth (only if exact solution exists)
+            plt.subplot(n_outputs + 2, 3, plot_idx)
+            plt.title(f"[{i}] {comp_name} - Exact")
+            _plot_test_im(u_exact, xlim0, ulim, n_test, output_idx=comp_idx)
+            plot_idx += 1
+            
+            # Difference (only if exact solution exists)
+            plt.subplot(n_outputs + 2, 3, plot_idx)
+            plt.title(f"[{i}] {comp_name} - Error")
+            if u_exact.ndim == 2 and u_test.ndim == 2:
+                diff = u_exact[:, comp_idx:comp_idx+1] - u_test[:, comp_idx:comp_idx+1]
+            else:
+                diff = u_exact - u_test
+            diff_lim = np.abs(diff).max()
+            _plot_test_im(diff, xlim0, (-diff_lim, diff_lim), n_test, output_idx=0)
+            plot_idx += 1
         else:
-            diff = u_exact - u_test
-        diff_lim = np.abs(diff).max()
-        _plot_test_im(diff, xlim0, (-diff_lim, diff_lim), n_test, output_idx=0)
-        plot_idx += 1
+            # Physics-only training - skip exact solution and error plots
+            plt.subplot(n_outputs + 2, 3, plot_idx)
+            plt.title(f"[{i}] {comp_name} - Physics Only")
+            plt.text(0.5, 0.5, "No exact solution\n(Physics-only training)", 
+                    ha='center', va='center', transform=plt.gca().transAxes, fontsize=12)
+            plt.gca().set_xticks([])
+            plt.gca().set_yticks([])
+            plot_idx += 2  # Skip both exact and error plots
 
     plt.tight_layout()
     return (("test", f),)

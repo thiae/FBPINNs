@@ -19,7 +19,12 @@ def _lim(v, factor=1.1):
 
 def _plot_setup(x_batch_test, u_exact):
     # get general setup for plotting
-    xlim, ulim = _lim(x_batch_test), _lim(u_exact)
+    xlim = _lim(x_batch_test)
+    if u_exact is not None:
+        ulim = _lim(u_exact)
+    else:
+        # No exact solution - set default limits
+        ulim = (-1.0, 1.0)  # Default range for physics-only training
     return xlim, ulim
 
 def _to_numpy(f):

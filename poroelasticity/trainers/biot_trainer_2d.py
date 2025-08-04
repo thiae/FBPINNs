@@ -315,23 +315,21 @@ class BiotCoupled2D(Problem):
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape=None):
         """
-        DUMMY EXACT SOLUTION: Returns zeros to satisfy FBPINNs framework
+        NO EXACT SOLUTION: Physics-only training
         
-        The FBPINNs framework calls this during training for testing purposes.
-        Since we don't have a correct exact solution, we return zeros with the
-        correct shape to prevent crashes while essentially disabling the test.
+        For real-world poroelasticity problems, exact solutions typically don't exist.
+        This method returns None to indicate physics-only training should be used.
+        The framework now gracefully handles this case.
         
         Args:
             all_params: Parameters dictionary (unused)
-            x_batch: Input points [n_points, 2]
+            x_batch: Input points (unused)
             batch_shape: Batch shape (unused)
             
         Returns:
-            jnp.array: Zeros with shape [n_points, 3] for [u_x, u_y, p]
+            None: Indicates no exact solution - use physics-only training
         """
-        n_points = x_batch.shape[0]
-        # Return zeros for [u_x, u_y, p] - 3 outputs
-        return jnp.zeros((n_points, 3), dtype=jnp.float32)
+        return None
     
     # @staticmethod
     # def exact_solution_old(all_params, x_batch, batch_shape=None):
@@ -439,7 +437,7 @@ class BiotCoupledTrainer:
                 'learning_rate': 5e-4,  # REDUCED: Lower learning rate for stability
             },
             summary_freq=100,
-            test_freq=999999999,  # DISABLE: Set test frequency to huge number to disable exact solution testing
+            test_freq=500,  # Normal test frequency - exact solution testing now optional in framework
             show_figures=False,
             save_figures=False,
             clear_output=True
@@ -1008,13 +1006,13 @@ class BiotCoupledTrainer:
         recommendations = []
         
         if diagnostics['field_statistics']['has_nan'] or diagnostics['field_statistics']['has_inf']:
-            recommendations.append("🚨 CRITICAL: NaN/Inf detected - reduce learning rate or check scaling")
+            recommendations.append(" CRITICAL: NaN/Inf detected - reduce learning rate or check scaling")
             
         if bc_violations.get('left_p_violation', 0) > 0.1:
-            recommendations.append("⚠️ Left boundary pressure not satisfied - increase BC weight")
+            recommendations.append(" Left boundary pressure not satisfied - increase BC weight")
             
         if bc_violations.get('right_p_violation', 0) > 0.1:
-            recommendations.append("⚠️ Right boundary pressure not satisfied - increase BC weight")
+            recommendations.append(" Right boundary pressure not satisfied - increase BC weight")
             
         if max(bc_violations.values()) > 0.01:
             recommendations.append("🔧 Try train_extreme_bc_enforcement() method")
@@ -1024,7 +1022,7 @@ class BiotCoupledTrainer:
             recommendations.append("🔧 Pressure outside physical bounds [0,1] - check physics implementation")
             
         if len(recommendations) == 0:
-            recommendations.append("✅ No obvious issues detected - model might need more training steps")
+            recommendations.append(" No obvious issues detected - model might need more training steps")
             
         diagnostics['recommendations'] = recommendations
         
