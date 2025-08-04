@@ -2,6 +2,10 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 import optax
+import pickle
+import os
+import matplotlib.pyplot as plt
+from matplotlib import cm
 from fbpinns.domains import RectangularDomainND
 from fbpinns.problems import Problem
 from fbpinns.decompositions import RectangularDecompositionND
@@ -344,59 +348,59 @@ class BiotCoupled2D(Problem):
         
         return left_bc_satisfied and right_bc_satisfied and bottom_bc_satisfied
     
-    @staticmethod
-    def exact_solution(all_params, x_batch, batch_shape=None):
-        """
-        CORRECTED: Physically consistent analytical solution
+    # @staticmethod
+    # def exact_solution(all_params, x_batch, batch_shape=None):
+    #     """
+    #     CORRECTED: Physically consistent analytical solution
         
-        Strategy: Build solution that satisfies ALL boundary conditions 
-        and physics equations simultaneously
-        """
-        static_params = all_params["static"]["problem"]
-        alpha = static_params["alpha"]
-        k = static_params["k"]
-        G = static_params["G"]
-        lam = static_params["lam"]
+    #     Strategy: Build solution that satisfies ALL boundary conditions 
+    #     and physics equations simultaneously
+    #     """
+    #     static_params = all_params["static"]["problem"]
+    #     alpha = static_params["alpha"]
+    #     k = static_params["k"]
+    #     G = static_params["G"]
+    #     lam = static_params["lam"]
         
-        x = x_batch[:, 0]
-        y = x_batch[:, 1]
+    #     x = x_batch[:, 0]
+    #     y = x_batch[:, 1]
 
-        # PRESSURE: Keep linear solution p = 1 - x
-        # This satisfies: p(0)=1, p(1)=0, ∇²p=0
-        p = (1.0 - x).reshape(-1, 1)
+    #     # PRESSURE: Keep linear solution p = 1 - x
+    #     # This satisfies: p(0)=1, p(1)=0, ∇²p=0
+    #     p = (1.0 - x).reshape(-1, 1)
         
-        # DISPLACEMENT: Design to satisfy ALL constraints
+    #     # DISPLACEMENT: Design to satisfy ALL constraints
         
-        # Key insight: We need uy(x,0) = 0 for ALL x (bottom boundary)
-        # AND uy(0,y) = 0 for ALL y (left boundary)
-        # This means uy must be proportional to BOTH x and y: uy ∝ x*y
+    #     # Key insight: We need uy(x,0) = 0 for ALL x (bottom boundary)
+    #     # AND uy(0,y) = 0 for ALL y (left boundary)
+    #     # This means uy must be proportional to BOTH x and y: uy ∝ x*y
         
-        # For ux: Must satisfy ux(0,y) = 0 (left boundary)
-        # Can be proportional to x: ux ∝ x*f(y)
+    #     # For ux: Must satisfy ux(0,y) = 0 (left boundary)
+    #     # Can be proportional to x: ux ∝ x*f(y)
         
-        # CORRECTED DISPLACEMENT FIELD:
-        # Design to satisfy boundary conditions EXACTLY
+    #     # CORRECTED DISPLACEMENT FIELD:
+    #     # Design to satisfy boundary conditions EXACTLY
         
-        # ux: Zero at x=0, reasonable physics elsewhere
-        # Use: ux = A * x * (1-x) * g(y) where g(y) ensures proper physics
-        A = alpha / (8.0 * G + 4.0 * lam)  # Scaling factor
-        ux = A * x * (1.0 - x) * (1.0 + 0.2 * y * (1.0 - y))
+    #     # ux: Zero at x=0, reasonable physics elsewhere
+    #     # Use: ux = A * x * (1-x) * g(y) where g(y) ensures proper physics
+    #     A = alpha / (8.0 * G + 4.0 * lam)  # Scaling factor
+    #     ux = A * x * (1.0 - x) * (1.0 + 0.2 * y * (1.0 - y))
         
-        # uy: MUST be zero at x=0 AND y=0
-        # Use: uy = B * x * y * h(x,y) 
-        B = -alpha / (12.0 * G + 6.0 * lam)  # Scaling factor
-        uy = B * x * y * (2.0 - x) * (1.0 - 0.3 * y)
+    #     # uy: MUST be zero at x=0 AND y=0
+    #     # Use: uy = B * x * y * h(x,y) 
+    #     B = -alpha / (12.0 * G + 6.0 * lam)  # Scaling factor
+    #     uy = B * x * y * (2.0 - x) * (1.0 - 0.3 * y)
         
-        # This ensures:
-        # - ux(0,y) = 0 ✓ (left boundary)
-        # - uy(0,y) = 0 ✓ (left boundary) 
-        # - uy(x,0) = 0 ✓ (bottom boundary)
-        # - Reasonable physics in interior ✓
+    #     # This ensures:
+    #     # - ux(0,y) = 0 ✓ (left boundary)
+    #     # - uy(0,y) = 0 ✓ (left boundary) 
+    #     # - uy(x,0) = 0 ✓ (bottom boundary)
+    #     # - Reasonable physics in interior ✓
         
-        ux = ux.reshape(-1, 1)
-        uy = uy.reshape(-1, 1)
+    #     ux = ux.reshape(-1, 1)
+    #     uy = uy.reshape(-1, 1)
 
-        return jnp.hstack([ux, uy, p])
+    #     return jnp.hstack([ux, uy, p])
 
 class BiotCoupledTrainer:
     """
@@ -441,9 +445,9 @@ class BiotCoupledTrainer:
                 'unnorm': (0., 1.)
             },
             network=FCN,
-            network_init_kwargs={'layer_sizes': [2, 256, 256, 256, 256, 3], 'activation': 'swish'},  # 3 outputs
+            network_init_kwargs={'layer_sizes': [2, 512, 512, 512, 512, 512, 3], 'activation': 'swish'},  # Deeper network for complex physics
             # CRITICAL FIX: Increase boundary sampling for better BC enforcement
-            ns=((100, 100), (100,), (100,), (100,), (100,)),  # Equal interior/boundary sampling
+            ns=((50, 50), (200,), (200,), (200,), (200,)),  # MUCH MORE boundary sampling
             n_test=(15, 15),  # Test points for evaluation
             n_steps=1700,  # OPTIMAL: Research-proven convergence point (99.5% improvement)
             optimiser_kwargs={
@@ -489,6 +493,63 @@ class BiotCoupledTrainer:
         print("   - Boundary weight increased 100x")
         print("   - This should fix negative pressure predictions")
         return self._train_with_weights(n_steps, w_mech=1.0, w_flow=1.0, w_bc=100.0)
+    
+    def train_physics_first(self, n_steps=1700):
+        """
+        PHYSICS-FIRST TRAINING: Focus on learning correct physics without loss balancing
+        
+        This method addresses the core issue you're experiencing:
+        - Disables automatic loss balancing that can hide problems
+        - Uses equal weights for all physics components
+        - Focuses on boundary condition enforcement
+        - Provides step-by-step progress monitoring
+        
+        Use this when your loss decreases but physics isn't learned correctly.
+        """
+        print(" PHYSICS-FIRST TRAINING")
+        print("   - Disabled automatic loss balancing")  
+        print("   - Equal weight given to all physics components")
+        print("   - Strong boundary condition enforcement")
+        print("   - Step-by-step monitoring enabled")
+        
+        # Temporarily disable auto-balancing for pure physics learning
+        old_auto_balance = self.auto_balance
+        self.auto_balance = False
+        
+        try:
+            # Train with equal weights and strong BC enforcement
+            return self._train_with_weights(n_steps, w_mech=1.0, w_flow=1.0, w_bc=10.0)
+        finally:
+            # Restore original setting
+            self.auto_balance = old_auto_balance
+    
+    def train_simple_debug(self, n_steps=500):
+        """
+         DEBUGGING MODE: Minimal training for problem identification
+        
+        Ultra-simplified training to isolate the core issue:
+        - Short training duration
+        - No complex loss balancing
+        - Heavy boundary condition emphasis
+        - Perfect for diagnosing fundamental problems
+        """
+        print(" DEBUG MODE: Simplified training for problem diagnosis")
+        print("   - Short training (500 steps)")
+        print("   - No automatic balancing")
+        print("   - Heavy BC emphasis")
+        
+        old_auto_balance = self.auto_balance
+        self.auto_balance = False
+        
+        try:
+            # Simple training: just learn BCs first, then add physics
+            print("   Phase 1: Learning boundary conditions...")
+            self._train_with_weights(n_steps//2, w_mech=0.1, w_flow=0.1, w_bc=50.0)
+            
+            print("   Phase 2: Adding physics...")
+            return self._train_with_weights(n_steps//2, w_mech=1.0, w_flow=1.0, w_bc=20.0)
+        finally:
+            self.auto_balance = old_auto_balance
     
     def train_gradual_coupling(self, n_steps_pre=50, n_steps_coupled=100):
         """
@@ -579,6 +640,428 @@ class BiotCoupledTrainer:
             # Initialize parameters if not trained 
             raise RuntimeError("Train first, then call get_test_points")
         return self.trainer.get_batch(self.all_params, self.config.n_test, 'test')
+    
+    def save_model(self, path):
+        """
+        Save the trained model to a specified path
+        
+        Args:
+            path: Path to save the model to (e.g., 'biot_model.jax')
+        """
+        if self.all_params is None:
+            raise ValueError("Model not trained yet, cannot save")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or '.', exist_ok=True)
+        
+        # Convert JAX arrays to numpy for serialization
+        params_np = jax.tree_util.tree_map(
+            lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x, 
+            self.all_params
+        )
+        
+        # Save model configuration along with parameters
+        save_dict = {
+            'all_params': params_np,
+            'config': self.config,
+            'w_mech': self.w_mech,
+            'w_flow': self.w_flow,
+            'w_bc': self.w_bc,
+            'auto_balance': self.auto_balance
+        }
+        
+        with open(path, 'wb') as f:
+            pickle.dump(save_dict, f)
+        
+        print(f"Model saved to {path}")
+    
+    @classmethod
+    def load_model(cls, path):
+        """
+        Load a trained model from a specified path
+        
+        Args:
+            path: Path to load the model from
+            
+        Returns:
+            BiotCoupledTrainer: A loaded trainer instance
+        """
+        with open(path, 'rb') as f:
+            save_dict = pickle.load(f)
+        
+        # Extract saved parameters
+        all_params = save_dict['all_params']
+        config = save_dict['config']
+        w_mech = save_dict.get('w_mech', 1.0)
+        w_flow = save_dict.get('w_flow', 1.0)
+        w_bc = save_dict.get('w_bc', 1.0)
+        auto_balance = save_dict.get('auto_balance', True)
+        
+        # Convert numpy arrays back to JAX
+        all_params = jax.tree_util.tree_map(
+            lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
+            all_params
+        )
+        
+        # Create new trainer instance
+        trainer = cls(w_mech=w_mech, w_flow=w_flow, w_bc=w_bc, auto_balance=auto_balance)
+        
+        # Set the loaded parameters
+        trainer.all_params = all_params
+        trainer.config = config
+        
+        print(f"Model loaded from {path}")
+        return trainer
+    
+    def compute_mse(self, x_points, true_vals):
+        """
+        Compute Mean Squared Error between predictions and ground truth
+        
+        Args:
+            x_points: Points to evaluate at (shape: [n_points, 2])
+            true_vals: Ground truth values (shape: [n_points, 3] for [u_x, u_y, p])
+                       Can also be shape [n_points, 1] or [n_points, 2] for partial comparison
+        
+        Returns:
+            dict: MSE values for each output component and total
+        """
+        if self.all_params is None:
+            raise ValueError("Model not trained yet")
+        
+        # Get predictions
+        pred = self.predict(x_points)
+        
+        # Handle different shapes of true_vals
+        if true_vals.shape[1] == 3:  # Full [u_x, u_y, p]
+            mse_ux = jnp.mean((pred[:, 0] - true_vals[:, 0])**2)
+            mse_uy = jnp.mean((pred[:, 1] - true_vals[:, 1])**2)
+            mse_p = jnp.mean((pred[:, 2] - true_vals[:, 2])**2)
+            mse_total = jnp.mean((pred - true_vals)**2)
+            
+            return {
+                'ux': float(mse_ux),
+                'uy': float(mse_uy),
+                'p': float(mse_p),
+                'total': float(mse_total)
+            }
+        elif true_vals.shape[1] == 2:  # Only displacement [u_x, u_y]
+            mse_ux = jnp.mean((pred[:, 0] - true_vals[:, 0])**2)
+            mse_uy = jnp.mean((pred[:, 1] - true_vals[:, 1])**2)
+            mse_disp = jnp.mean((pred[:, :2] - true_vals)**2)
+            
+            return {
+                'ux': float(mse_ux),
+                'uy': float(mse_uy),
+                'displacement': float(mse_disp)
+            }
+        elif true_vals.shape[1] == 1:  # Only pressure [p]
+            mse_p = jnp.mean((pred[:, 2:3] - true_vals)**2)
+            
+            return {'p': float(mse_p)}
+    
+    def plot_displacement_x(self, x_points=None, cmap='viridis', figsize=(10, 8), title=None, save_path=None):
+        """
+        Plot x-displacement field on a 2D grid
+        
+        Args:
+            x_points: Custom points to evaluate at (if None, uses a grid)
+            cmap: Colormap for plotting
+            figsize: Figure size
+            title: Custom title (if None, uses default)
+            save_path: Path to save figure (if None, doesn't save)
+            
+        Returns:
+            matplotlib Figure and Axes
+        """
+        # Generate grid points if not provided
+        if x_points is None:
+            x = np.linspace(0, 1, 50)
+            y = np.linspace(0, 1, 50)
+            X, Y = np.meshgrid(x, y)
+            x_points = np.column_stack([X.flatten(), Y.flatten()])
+        
+        # Get predictions
+        pred = self.predict(x_points)
+        ux = pred[:, 0]
+        
+        # Reshape for plotting if it's a grid
+        try:
+            n = int(np.sqrt(x_points.shape[0]))
+            if n*n == x_points.shape[0]:  # Perfect square check
+                X = x_points[:, 0].reshape(n, n)
+                Y = x_points[:, 1].reshape(n, n)
+                UX = ux.reshape(n, n)
+                grid_data = True
+            else:
+                grid_data = False
+        except:
+            grid_data = False
+            
+        # Create figure
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        if grid_data:
+            # Plot as a contour/colormap
+            cf = ax.contourf(X, Y, UX, 50, cmap=cmap)
+            plt.colorbar(cf, ax=ax, label='Displacement-X')
+        else:
+            # Scatter plot for irregular points
+            sc = ax.scatter(x_points[:, 0], x_points[:, 1], c=ux, cmap=cmap, s=20)
+            plt.colorbar(sc, ax=ax, label='Displacement-X')
+        
+        # Add labels and title
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_title(title or 'X-Displacement Field')
+        ax.set_aspect('equal')
+        
+        # Save if path provided
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            
+        return fig, ax
+    
+    def plot_displacement_y(self, x_points=None, cmap='viridis', figsize=(10, 8), title=None, save_path=None):
+        """
+        Plot y-displacement field on a 2D grid
+        
+        Args:
+            x_points: Custom points to evaluate at (if None, uses a grid)
+            cmap: Colormap for plotting
+            figsize: Figure size
+            title: Custom title (if None, uses default)
+            save_path: Path to save figure (if None, doesn't save)
+            
+        Returns:
+            matplotlib Figure and Axes
+        """
+        # Generate grid points if not provided
+        if x_points is None:
+            x = np.linspace(0, 1, 50)
+            y = np.linspace(0, 1, 50)
+            X, Y = np.meshgrid(x, y)
+            x_points = np.column_stack([X.flatten(), Y.flatten()])
+        
+        # Get predictions
+        pred = self.predict(x_points)
+        uy = pred[:, 1]
+        
+        # Reshape for plotting if it's a grid
+        try:
+            n = int(np.sqrt(x_points.shape[0]))
+            if n*n == x_points.shape[0]:  # Perfect square check
+                X = x_points[:, 0].reshape(n, n)
+                Y = x_points[:, 1].reshape(n, n)
+                UY = uy.reshape(n, n)
+                grid_data = True
+            else:
+                grid_data = False
+        except:
+            grid_data = False
+            
+        # Create figure
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        if grid_data:
+            # Plot as a contour/colormap
+            cf = ax.contourf(X, Y, UY, 50, cmap=cmap)
+            plt.colorbar(cf, ax=ax, label='Displacement-Y')
+        else:
+            # Scatter plot for irregular points
+            sc = ax.scatter(x_points[:, 0], x_points[:, 1], c=uy, cmap=cmap, s=20)
+            plt.colorbar(sc, ax=ax, label='Displacement-Y')
+        
+        # Add labels and title
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_title(title or 'Y-Displacement Field')
+        ax.set_aspect('equal')
+        
+        # Save if path provided
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            
+        return fig, ax
+    
+    def plot_pressure(self, x_points=None, cmap='plasma', figsize=(10, 8), title=None, save_path=None):
+        """
+        Plot pressure field on a 2D grid
+        
+        Args:
+            x_points: Custom points to evaluate at (if None, uses a grid)
+            cmap: Colormap for plotting
+            figsize: Figure size
+            title: Custom title (if None, uses default)
+            save_path: Path to save figure (if None, doesn't save)
+            
+        Returns:
+            matplotlib Figure and Axes
+        """
+        # Generate grid points if not provided
+        if x_points is None:
+            x = np.linspace(0, 1, 50)
+            y = np.linspace(0, 1, 50)
+            X, Y = np.meshgrid(x, y)
+            x_points = np.column_stack([X.flatten(), Y.flatten()])
+        
+        # Get predictions
+        pred = self.predict(x_points)
+        p = pred[:, 2]
+        
+        # Reshape for plotting if it's a grid
+        try:
+            n = int(np.sqrt(x_points.shape[0]))
+            if n*n == x_points.shape[0]:  # Perfect square check
+                X = x_points[:, 0].reshape(n, n)
+                Y = x_points[:, 1].reshape(n, n)
+                P = p.reshape(n, n)
+                grid_data = True
+            else:
+                grid_data = False
+        except:
+            grid_data = False
+            
+        # Create figure
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        if grid_data:
+            # Plot as a contour/colormap
+            cf = ax.contourf(X, Y, P, 50, cmap=cmap)
+            plt.colorbar(cf, ax=ax, label='Pressure')
+        else:
+            # Scatter plot for irregular points
+            sc = ax.scatter(x_points[:, 0], x_points[:, 1], c=p, cmap=cmap, s=20)
+            plt.colorbar(sc, ax=ax, label='Pressure')
+        
+        # Add labels and title
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_title(title or 'Pressure Field')
+        ax.set_aspect('equal')
+        
+        # Save if path provided
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            
+        return fig, ax
+    
+    def diagnose_training_issues(self, x_points=None, print_details=True):
+        """
+        🔍 DIAGNOSTIC TOOL: Identify why model isn't learning physics
+        
+        This method helps debug the classic PINN problem where loss decreases
+        but the model doesn't learn the actual physics.
+        
+        Args:
+            x_points: Points to diagnose at (if None, uses test points)
+            print_details: Whether to print detailed diagnosis
+            
+        Returns:
+            dict: Comprehensive diagnostic information
+        """
+        if self.all_params is None:
+            raise ValueError("Model not trained yet - train first, then diagnose")
+        
+        # Use test points if none provided
+        if x_points is None:
+            x_points = jnp.array([[0.1, 0.1], [0.5, 0.5], [0.9, 0.9],  # Interior points
+                                  [0.0, 0.5], [1.0, 0.5],              # Left/right boundaries
+                                  [0.5, 0.0], [0.5, 1.0]])             # Bottom/top boundaries
+        
+        # Get predictions
+        pred = self.predict(x_points)
+        
+        # Extract fields
+        ux = pred[:, 0]
+        uy = pred[:, 1] 
+        p = pred[:, 2]
+        
+        # Check boundary conditions
+        left_mask = jnp.abs(x_points[:, 0]) < 1e-6
+        right_mask = jnp.abs(x_points[:, 0] - 1.0) < 1e-6
+        bottom_mask = jnp.abs(x_points[:, 1]) < 1e-6
+        top_mask = jnp.abs(x_points[:, 1] - 1.0) < 1e-6
+        
+        diagnostics = {
+            'physics_residuals': {},
+            'boundary_violations': {},
+            'field_statistics': {},
+            'recommendations': []
+        }
+        
+        # Check field ranges
+        diagnostics['field_statistics'] = {
+            'ux_range': [float(jnp.min(ux)), float(jnp.max(ux))],
+            'uy_range': [float(jnp.min(uy)), float(jnp.max(uy))],
+            'p_range': [float(jnp.min(p)), float(jnp.max(p))],
+            'has_nan': bool(jnp.any(jnp.isnan(pred))),
+            'has_inf': bool(jnp.any(jnp.isinf(pred)))
+        }
+        
+        # Check boundary conditions
+        bc_violations = {}
+        
+        if jnp.any(left_mask):
+            left_ux = ux[left_mask]
+            left_uy = uy[left_mask] 
+            left_p = p[left_mask]
+            bc_violations['left_ux_violation'] = float(jnp.max(jnp.abs(left_ux)))
+            bc_violations['left_uy_violation'] = float(jnp.max(jnp.abs(left_uy)))
+            bc_violations['left_p_violation'] = float(jnp.max(jnp.abs(left_p - 1.0)))
+            
+        if jnp.any(right_mask):
+            right_p = p[right_mask]
+            bc_violations['right_p_violation'] = float(jnp.max(jnp.abs(right_p)))
+            
+        if jnp.any(bottom_mask):
+            bottom_uy = uy[bottom_mask]
+            bc_violations['bottom_uy_violation'] = float(jnp.max(jnp.abs(bottom_uy)))
+            
+        diagnostics['boundary_violations'] = bc_violations
+        
+        # Generate recommendations
+        recommendations = []
+        
+        if diagnostics['field_statistics']['has_nan'] or diagnostics['field_statistics']['has_inf']:
+            recommendations.append("🚨 CRITICAL: NaN/Inf detected - reduce learning rate or check scaling")
+            
+        if bc_violations.get('left_p_violation', 0) > 0.1:
+            recommendations.append("⚠️ Left boundary pressure not satisfied - increase BC weight")
+            
+        if bc_violations.get('right_p_violation', 0) > 0.1:
+            recommendations.append("⚠️ Right boundary pressure not satisfied - increase BC weight")
+            
+        if max(bc_violations.values()) > 0.01:
+            recommendations.append("🔧 Try train_extreme_bc_enforcement() method")
+            
+        p_range = diagnostics['field_statistics']['p_range']
+        if p_range[0] < -0.1 or p_range[1] > 1.1:
+            recommendations.append("🔧 Pressure outside physical bounds [0,1] - check physics implementation")
+            
+        if len(recommendations) == 0:
+            recommendations.append("✅ No obvious issues detected - model might need more training steps")
+            
+        diagnostics['recommendations'] = recommendations
+        
+        if print_details:
+            print("\n🔍 TRAINING DIAGNOSTICS")
+            print("=" * 50)
+            print(f"Field Ranges:")
+            print(f"  ux: [{diagnostics['field_statistics']['ux_range'][0]:.6f}, {diagnostics['field_statistics']['ux_range'][1]:.6f}]")
+            print(f"  uy: [{diagnostics['field_statistics']['uy_range'][0]:.6f}, {diagnostics['field_statistics']['uy_range'][1]:.6f}]")
+            print(f"  p:  [{diagnostics['field_statistics']['p_range'][0]:.6f}, {diagnostics['field_statistics']['p_range'][1]:.6f}]")
+            
+            print(f"\nBoundary Condition Violations:")
+            for bc, violation in bc_violations.items():
+                status = "✅" if violation < 1e-3 else "⚠️" if violation < 0.01 else "🚨"
+                print(f"  {bc}: {violation:.6f} {status}")
+                
+            print(f"\nRecommendations:")
+            for rec in recommendations:
+                print(f"  {rec}")
+            print("=" * 50)
+            
+        return diagnostics
 
 def CoupledTrainer():
     """Create unified coupled trainer with automatic loss balancing"""
