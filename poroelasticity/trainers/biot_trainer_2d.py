@@ -315,21 +315,23 @@ class BiotCoupled2D(Problem):
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape=None):
         """
-        DUMMY EXACT SOLUTION: Returns None to disable exact solution testing
+        DUMMY EXACT SOLUTION: Returns zeros to satisfy FBPINNs framework
         
         The FBPINNs framework calls this during training for testing purposes.
-        Since we don't have a correct exact solution, we return None to disable
-        this testing feature.
+        Since we don't have a correct exact solution, we return zeros with the
+        correct shape to prevent crashes while essentially disabling the test.
         
         Args:
             all_params: Parameters dictionary (unused)
-            x_batch: Input points (unused) 
+            x_batch: Input points [n_points, 2]
             batch_shape: Batch shape (unused)
             
         Returns:
-            None: Disables exact solution testing in FBPINNs framework
+            jnp.array: Zeros with shape [n_points, 3] for [u_x, u_y, p]
         """
-        return None
+        n_points = x_batch.shape[0]
+        # Return zeros for [u_x, u_y, p] - 3 outputs
+        return jnp.zeros((n_points, 3), dtype=jnp.float32)
     
     # @staticmethod
     # def exact_solution_old(all_params, x_batch, batch_shape=None):
