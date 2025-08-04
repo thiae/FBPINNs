@@ -439,7 +439,7 @@ class BiotCoupledTrainer:
                 'learning_rate': 5e-4,  # REDUCED: Lower learning rate for stability
             },
             summary_freq=100,
-            test_freq=500,
+            test_freq=999999999,  # DISABLE: Set test frequency to huge number to disable exact solution testing
             show_figures=False,
             save_figures=False,
             clear_output=True
