@@ -9,10 +9,16 @@ from fbpinns.networks import FCN
 from fbpinns.constants import Constants
 from fbpinns.trainers import FBPINNTrainer
 
-class BiotCoupled2D(Problem):
+class BiotCoupled2D_PhysicsOnly(Problem):
     """
-    Unified 2D Biot Poroelasticity Problem
-    Solves both mechanics (u_x, u_y) and flow (p) in one problem class
+    2D Biot Poroelasticity Problem - PHYSICS ONLY VERSION
+    No exact solution - let the PINN discover the true physics-based solution
+    
+    Physical scenario: Realistic reservoir injection
+    - Left: Injection well (u_x=0, u_y=0, p=1)
+    - Right: Production/drainage (σ·n=0, p=0)  
+    - Bottom: Impermeable bedrock (u_y=0, ∂p/∂y=0)
+    - Top: Sealed cap rock (σ·n=0, ∂p/∂y=0)
     
     Outputs: [u_x, u_y, p] - 3 total outputs
     Governing PDEs:
@@ -39,7 +45,6 @@ class BiotCoupled2D(Problem):
         k_ref = 1.0
         
         E_norm = E / E_ref
-        #k_norm = k / k_ref # Used only the k value for normalization in the loss function
 
         # Calculate the derived parameters using normalized Young's modulus
         G = E_norm * E_ref / (2.0 * (1.0 + nu))
@@ -108,7 +113,8 @@ class BiotCoupled2D(Problem):
         boundary_batch_shapes = batch_shapes[1:5]  # Skip interior (index 0)
         x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
-        # LEFT BOUNDARY
+        # LEFT BOUNDARY (x=0): INJECTION WELL
+        # Your original (CORRECT) boundary conditions: u_x=0, u_y=0, p=1
         x_batch_left = x_batches_boundaries[0]
         # Target values for: u_x = 0, u_y = 0, p = 1
         ux_target_left = jnp.zeros((x_batch_left.shape[0], 1))
@@ -116,21 +122,23 @@ class BiotCoupled2D(Problem):
         p_target_left = jnp.ones((x_batch_left.shape[0], 1))
         required_ujs_left = ((0, ()), (1, ()), (2, ()))
 
-        # RIGHT BOUNDARY  
+        # RIGHT BOUNDARY (x=1): PRODUCTION/DRAINAGE
+        # Your original (CORRECT) boundary conditions: σ·n=0, p=0
         x_batch_right = x_batches_boundaries[1]
-        # Target values for: ∂u_x/∂x = 0, ∂u_y/∂y = 0, p = 0
+        # Target values for: p = 0, and traction-free conditions
         p_target_right = jnp.zeros((x_batch_right.shape[0], 1))
         required_ujs_right = ((0, (0,)), (0, (1,)), (1, (0,)), (1, (1,)), (2, ()))
 
-        # BOTTOM BOUNDARY
+        # BOTTOM BOUNDARY (y=0): IMPERMEABLE BEDROCK
+        # Your original (CORRECT) boundary conditions: u_y=0, ∂p/∂y=0
         x_batch_bottom = x_batches_boundaries[2]  
         # Target values for: u_y = 0, ∂p/∂y = 0
         uy_target_bottom = jnp.zeros((x_batch_bottom.shape[0], 1))
         required_ujs_bottom = ((1, ()), (2, (1,)))
 
-        # TOP BOUNDARY
+        # TOP BOUNDARY (y=1): SEALED CAP ROCK
+        # Your original (CORRECT) boundary conditions: σ·n=0, ∂p/∂y=0
         x_batch_top = x_batches_boundaries[3]
-        # Target values for: ∂u_x/∂x = 0, ∂u_y/∂y = 0, ∂p/∂y = 0
         required_ujs_top = ((0, (0,)), (0, (1,)), (1, (0,)), (1, (1,)), (2, ()), (2, (1,)))
 
         return [
@@ -192,15 +200,13 @@ class BiotCoupled2D(Problem):
         # FLOW RESIDUAL
         # Flow equation: -k∇²p + α∇·u = 0
         laplacian_p = d2pdx2 + d2pdy2
-        # Normalized permeability for better numerical stability
-        #k_norm = k / all_params["static"]["problem"].get("k_ref", 1.0) (k norm wasnt used here because its the same value as k)
         flow_residual = -k * laplacian_p + alpha * div_u
         flow_loss = jnp.mean(flow_residual**2)
 
         # BOUNDARY CONDITIONS
         boundary_loss = 0.0
         
-        # LEFT BOUNDARY: u_x=0, u_y=0, p=1
+        # LEFT BOUNDARY: u_x=0, u_y=0, p=1 (INJECTION WELL)
         constraint_left = constraints[1]
         x_batch_left = constraint_left[0]
         ux_target_left = constraint_left[1] 
@@ -213,11 +219,7 @@ class BiotCoupled2D(Problem):
                          jnp.mean((uy_left - uy_target_left)**2) +
                          jnp.mean((p_left - p_target_left)**2))
 
-        # RIGHT BOUNDARY: Traction-free σ·n=0, p=0
-        # Right boundary: ∂u_x/∂x=0, ∂u_y/∂y=0, p=0
-        # Implement traction BCs: σ·n = 0 (n=[1,0] on right boundary)
-        # Normal stress: σxx = (2G + λ)∂ux/∂x + λ∂uy/∂y - αp = 0
-        # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
+        # RIGHT BOUNDARY: Traction-free σ·n=0, p=0 (PRODUCTION/DRAINAGE)
         constraint_right = constraints[2]
         x_batch_right = constraint_right[0]
         p_target_right = constraint_right[1]
@@ -226,13 +228,16 @@ class BiotCoupled2D(Problem):
         duydx_right = constraint_right[4]
         duydy_right = constraint_right[5]
         p_right = constraint_right[6]
+        # Traction-free: σ·n = 0 (n=[1,0] on right boundary)
+        # Normal stress: σxx = (2G + λ)∂ux/∂x + λ∂uy/∂y - αp = 0
+        # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
         normal_residual = (2*G + lam)*duxdx_right + lam*duydy_right - alpha*p_right
         shear_residual = G*(duxdy_right + duydx_right)
         boundary_loss += (jnp.mean(normal_residual**2) + 
                          jnp.mean(shear_residual**2) +
                          jnp.mean((p_right - p_target_right)**2))
 
-        # BOTTOM BOUNDARY: u_y=0, ∂p/∂y=0
+        # BOTTOM BOUNDARY: u_y=0, ∂p/∂y=0 (IMPERMEABLE BEDROCK)
         constraint_bottom = constraints[3]
         x_batch_bottom = constraint_bottom[0]
         uy_target_bottom = constraint_bottom[1]
@@ -241,10 +246,7 @@ class BiotCoupled2D(Problem):
         boundary_loss += (jnp.mean((uy_bottom - uy_target_bottom)**2) +
                          jnp.mean(dpdy_bottom**2))
         
-        # TOP BOUNDARY: ∂u_x/∂x=0, ∂u_y/∂y=0, ∂p/∂y=0
-        # Implement traction BCs: σ·n = 0 (n=[0,1] on top boundary)
-        # Normal stress: σyy = (2G + λ)∂uy/∂y + λ∂ux/∂x - αp = 0
-        # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
+        # TOP BOUNDARY: σ·n=0, ∂p/∂y=0 (SEALED CAP ROCK)
         constraint_top = constraints[4]
         x_batch_top = constraint_top[0]
         duxdx_top = constraint_top[1]
@@ -253,13 +255,16 @@ class BiotCoupled2D(Problem):
         duydy_top = constraint_top[4]
         p_top = constraint_top[5]
         dpdy_top = constraint_top[6]
+        # Traction-free: σ·n = 0 (n=[0,1] on top boundary)
+        # Normal stress: σyy = (2G + λ)∂uy/∂y + λ∂ux/∂x - αp = 0
+        # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
         normal_residual_top = (2*G + lam)*duydy_top + lam*duxdx_top - alpha*p_top
         shear_residual_top = G*(duxdy_top + duydx_top)
         boundary_loss += (jnp.mean(normal_residual_top**2) +
                          jnp.mean(shear_residual_top**2) +
                          jnp.mean(dpdy_top**2))
 
-        # Print loss components periodically for monitoring to diagnose which part of the physics is harder to learn
+        # Print loss components periodically for monitoring
         def _print_losses(step_val):
             jax.debug.print("Step {}: Mech: {:.2e}, Flow: {:.2e}, BC: {:.2e}", 
                             step_val, mechanics_loss, flow_loss, boundary_loss)
@@ -269,15 +274,15 @@ class BiotCoupled2D(Problem):
             return 0
         
         if auto_balance:
-            # CRITICAL FIX: More aggressive boundary condition enforcement
+            # Automatic loss balancing for better convergence
             mech_scale = jax.lax.stop_gradient(mechanics_loss + 1e-8)
             flow_scale = jax.lax.stop_gradient(flow_loss + 1e-8) 
             bc_scale = jax.lax.stop_gradient(boundary_loss + 1e-8)
             
-            # ENHANCED: Stronger boundary enforcement proportions
-            target_mech_ratio = 0.35  # Reduced from 0.45
-            target_flow_ratio = 0.35  # Reduced from 0.45
-            target_bc_ratio = 0.30    # Increased from 0.10 (3x stronger!)
+            # Target proportions (enhanced boundary enforcement)
+            target_mech_ratio = 0.35  
+            target_flow_ratio = 0.35  
+            target_bc_ratio = 0.30    # Strong boundary enforcement
             
             # Compute automatic weights to get target proportions
             auto_w_mech = target_mech_ratio / mech_scale
@@ -296,121 +301,16 @@ class BiotCoupled2D(Problem):
 
         return total_loss
     
-    @staticmethod
-    def verify_bcs(all_params, x_points, tol=1e-6, atol_disp=1e-3, atol_p=1e-2):
-        """
-        Verify that the exact solution satisfies boundary conditions
-        
-        Args:
-            all_params: Parameters dictionary
-            x_points: Points to evaluate at
-            tol: Tolerance for boundary identification
-            atol_disp: Absolute tolerance for displacement comparison
-            atol_p: Absolute tolerance for pressure comparison
-        """
-        # Get exact solution
-        pred = BiotCoupled2D.exact_solution(all_params, x_points)
-        
-        # Get displacements and pressure
-        u_x = pred[:, 0:1]
-        u_y = pred[:, 1:2]
-        p = pred[:, 2:3]
-        
-        # Extract coordinates
-        x = x_points[:, 0:1]
-        y = x_points[:, 1:2]
-        
-        # Left boundary (x=0): u_x=0, u_y=0, p=1
-        left_mask = x <= tol
-        left_bc_satisfied = (
-            jnp.allclose(u_x[left_mask], 0.0, atol=atol_disp) and
-            jnp.allclose(u_y[left_mask], 0.0, atol=atol_disp) and
-            jnp.allclose(p[left_mask], 1.0, atol=atol_p)
-        )
-        
-        # Right boundary (x=1): p=0 (traction BCs checked separately)
-        right_mask = jnp.abs(x - 1.0) <= tol
-        right_bc_satisfied = jnp.allclose(p[right_mask], 0.0, atol=atol_p)
-        
-        # Bottom boundary (y=0): u_y=0
-        bottom_mask = y <= tol
-        bottom_bc_satisfied = jnp.allclose(u_y[bottom_mask], 0.0, atol=atol_disp)
-        
-        # Print verification results
-        print("Boundary conditions verification:")
-        print(f"  Left boundary: {left_bc_satisfied}")
-        print(f"  Right boundary: {right_bc_satisfied}")
-        print(f"  Bottom boundary: {bottom_bc_satisfied}")
-        
-        return left_bc_satisfied and right_bc_satisfied and bottom_bc_satisfied
-    
-    @staticmethod
-    def exact_solution(all_params, x_batch, batch_shape=None):
-        """
-        CORRECTED: Physically consistent analytical solution
-        
-        Strategy: Build solution that satisfies ALL boundary conditions 
-        and physics equations simultaneously
-        """
-        static_params = all_params["static"]["problem"]
-        alpha = static_params["alpha"]
-        k = static_params["k"]
-        G = static_params["G"]
-        lam = static_params["lam"]
-        
-        x = x_batch[:, 0]
-        y = x_batch[:, 1]
+    # NO EXACT SOLUTION METHOD - Let physics drive the learning!
+    # The framework will handle this automatically
 
-        # PRESSURE: Keep linear solution p = 1 - x
-        # This satisfies: p(0)=1, p(1)=0, ∇²p=0
-        p = (1.0 - x).reshape(-1, 1)
-        
-        # DISPLACEMENT: Design to satisfy ALL constraints
-        
-        # Key insight: We need uy(x,0) = 0 for ALL x (bottom boundary)
-        # AND uy(0,y) = 0 for ALL y (left boundary)
-        # This means uy must be proportional to BOTH x and y: uy ∝ x*y
-        
-        # For ux: Must satisfy ux(0,y) = 0 (left boundary)
-        # Can be proportional to x: ux ∝ x*f(y)
-        
-        # CORRECTED DISPLACEMENT FIELD:
-        # Design to satisfy boundary conditions EXACTLY
-        
-        # ux: Zero at x=0, reasonable physics elsewhere
-        # Use: ux = A * x * (1-x) * g(y) where g(y) ensures proper physics
-        A = alpha / (8.0 * G + 4.0 * lam)  # Scaling factor
-        ux = A * x * (1.0 - x) * (1.0 + 0.2 * y * (1.0 - y))
-        
-        # uy: MUST be zero at x=0 AND y=0
-        # Use: uy = B * x * y * h(x,y) 
-        B = -alpha / (12.0 * G + 6.0 * lam)  # Scaling factor
-        uy = B * x * y * (2.0 - x) * (1.0 - 0.3 * y)
-        
-        # This ensures:
-        # - ux(0,y) = 0 ✓ (left boundary)
-        # - uy(0,y) = 0 ✓ (left boundary) 
-        # - uy(x,0) = 0 ✓ (bottom boundary)
-        # - Reasonable physics in interior ✓
-        
-        ux = ux.reshape(-1, 1)
-        uy = uy.reshape(-1, 1)
 
-        return jnp.hstack([ux, uy, p])
-
-class BiotCoupledTrainer:
+class BiotPhysicsOnlyTrainer:
     """
-    Trainer class for the unified Biot problem with optimal training protocol
+    Trainer class for physics-only Biot problem (no exact solution)
     
-    Research Findings (2025):
-    - Optimal convergence: 1700 steps (99.5% loss reduction)
-    - Training instability threshold: >1900 steps
-    - Current architecture capacity: ~1700 steps optimal
-    
-    Features:
-    - Physics-driven exact solution implementation
-    - Automatic loss balancing between mechanics/flow/BC
-    - Research-proven optimal training defaults
+    This will let the PINN discover the TRUE solution to your boundary value problem
+    based purely on physics equations and boundary conditions.
     """
     
     def __init__(self, w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True):
@@ -429,10 +329,10 @@ class BiotCoupledTrainer:
         self.auto_balance = auto_balance
 
         self.config = Constants(
-            run="biot_coupled_2d",
+            run="biot_physics_only_2d",
             domain=RectangularDomainND,
             domain_init_kwargs={'xmin': jnp.array([0., 0.]), 'xmax': jnp.array([1., 1.])},
-            problem=BiotCoupled2D,
+            problem=BiotCoupled2D_PhysicsOnly,
             problem_init_kwargs={'E': 5000.0, 'nu': 0.25, 'alpha': 0.8, 'k': 1.0, 'mu': 1.0},
             decomposition=RectangularDecompositionND,
             decomposition_init_kwargs={
@@ -442,84 +342,42 @@ class BiotCoupledTrainer:
             },
             network=FCN,
             network_init_kwargs={'layer_sizes': [2, 256, 256, 256, 256, 3], 'activation': 'swish'},  # 3 outputs
-            # CRITICAL FIX: Increase boundary sampling for better BC enforcement
-            ns=((100, 100), (100,), (100,), (100,), (100,)),  # Equal interior/boundary sampling
-            n_test=(15, 15),  # Test points for evaluation
-            n_steps=1700,  # OPTIMAL: Research-proven convergence point (99.5% improvement)
+            # Enhanced boundary sampling for better BC enforcement
+            ns=((120, 120), (80,), (80,), (60,), (60,)),  # More boundary points
+            n_test=(20, 20),  # Test points for evaluation
+            n_steps=2000,  # Slightly more steps since no exact solution to guide
             optimiser_kwargs={
-                'learning_rate': 5e-4,  # REDUCED: Lower learning rate for stability
+                'learning_rate': 3e-4,  # Slightly lower learning rate for stability
             },
-            summary_freq=100,
-            test_freq=500,
-            show_figures=False,
-            save_figures=False,
+            summary_freq=50,   # Monitor more frequently
+            test_freq=200,     # Test more frequently
+            show_figures=True,
+            save_figures=True,
             clear_output=True
         )
         self.trainer = FBPINNTrainer(self.config)
         self.all_params = None
     
-    def train_mechanics_only(self, n_steps=100):
-        """Pre train mechanics only (sets flow weight to 0)"""
-        print("Pre training mechanics only")
-        return self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=0.0, w_bc=self.w_bc)
-    
-    def train_flow_only(self, n_steps=100):
-        """Pre train flow only (sets mechanics weight to 0)"""
-        print("Pre training flow only")
-        return self._train_with_weights(n_steps, w_mech=0.0, w_flow=self.w_flow, w_bc=self.w_bc)
-    
-    def train_coupled(self, n_steps=1700):
-        """Train fully coupled system with automatic balancing
-        
-        Default n_steps=1700 based on research findings:
-        - Optimal convergence achieved around step 1700
-        - 99.5% loss reduction from initial values
-        - Training beyond 1900 steps causes numerical instability
+    def train_coupled(self, n_steps=2000):
         """
-        print("Training coupled system with automatic loss balancing")
-        return self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
+        Train fully coupled system with physics-only learning
+        
+        Args:
+            n_steps: Number of training steps
+        """
+        print("🔬 PHYSICS-ONLY TRAINING")
+        print("   - No exact solution to constrain learning")
+        print("   - PINN will discover true solution from physics + BCs")
+        print("   - Expect realistic reservoir injection behavior!")
+        print()
+        
+        return self._train_with_weights(n_steps, self.w_mech, self.w_flow, self.w_bc)
     
-    def train_extreme_bc_enforcement(self, n_steps=1700):
-        """EMERGENCY: Train with extreme boundary condition enforcement
-        
-        Use when standard training fails to learn boundary conditions properly.
-        Massively overweights boundary conditions to force compliance.
-        """
-        print("🚨 EMERGENCY: Training with extreme boundary condition enforcement")
-        print("   - Boundary weight increased 100x")
-        print("   - This should fix negative pressure predictions")
-        return self._train_with_weights(n_steps, w_mech=1.0, w_flow=1.0, w_bc=100.0)
-    
-    def train_gradual_coupling(self, n_steps_pre=50, n_steps_coupled=100):
-        """
-        Gradual coupling with automatic loss balancing
-        """
-        print(" Gradual coupling with auto balance ")
-
-        # Step 1: Train mechanics only (disable auto balance for single equation)
-        old_auto_balance = self.auto_balance
-        self.auto_balance = False
-        self.train_mechanics_only(n_steps_pre)
-        
-        # Step 2: Train flow only  
-        self.train_flow_only(n_steps_pre)
-        
-        # Step 3: Use auto balancing for coupled training
-        self.auto_balance = True
-        
-        # Gradually increasing coupling with auto balancing
-        coupling_schedule = [0.1, 0.3, 0.5, 0.8, 1.0]
-        for i, coupling_strength in enumerate(coupling_schedule):
-            print(f"Coupling step {i+1}/5: strength = {coupling_strength} (auto-balanced)")
-            w_mech_scaled = coupling_strength * self.w_mech
-            w_flow_scaled = coupling_strength * self.w_flow
-            self._train_with_weights(n_steps_coupled//5, w_mech_scaled, w_flow_scaled, self.w_bc)
-        
-        # Restore original auto balancing setting
-        self.auto_balance = old_auto_balance
-        
-        print(" Gradual coupling with auto balancing completed ")
-        return self.all_params
+    def train_enhanced_bc(self, n_steps=2000):
+        """Train with extra emphasis on boundary conditions"""
+        print("🎯 ENHANCED BOUNDARY CONDITION TRAINING")
+        print("   - 5x stronger boundary enforcement")
+        return self._train_with_weights(n_steps, self.w_mech, self.w_flow, 5.0 * self.w_bc)
     
     def _train_with_weights(self, n_steps, w_mech, w_flow, w_bc):
         """Internal method to train with specific weights"""
@@ -538,6 +396,10 @@ class BiotCoupledTrainer:
         old_n_steps = self.trainer.c.n_steps
         self.trainer.c.n_steps = n_steps
         
+        print(f"Training for {n_steps} steps...")
+        print("Loss components will be automatically balanced")
+        print()
+        
         # Train
         self.all_params = self.trainer.train()
         
@@ -545,12 +407,16 @@ class BiotCoupledTrainer:
         self.trainer.c.n_steps = old_n_steps
         problem_class.loss_fn = original_loss_fn
         
+        print()
+        print("✅ Training completed!")
+        print("   Check the results - should show realistic injection patterns")
+        
         return self.all_params
     
     def predict(self, x_points):
         """Predict [u_x, u_y, p] at given points using FBPINN_solution"""
         if self.all_params is None:
-            raise ValueError(" Model not trained yet")
+            raise ValueError("Model not trained yet. Call train_coupled() first.")
         
         # Using the FBPINN_solution function from analysis module
         from fbpinns.analysis import FBPINN_solution
@@ -576,10 +442,112 @@ class BiotCoupledTrainer:
     def get_test_points(self):
         """Get test points for evaluation"""
         if self.all_params is None:
-            # Initialize parameters if not trained 
             raise RuntimeError("Train first, then call get_test_points")
         return self.trainer.get_batch(self.all_params, self.config.n_test, 'test')
+    
+    def verify_boundary_conditions(self, tol_disp=1e-2, tol_p=1e-2):
+        """
+        Verify that the learned solution satisfies boundary conditions
+        
+        Args:
+            tol_disp: Tolerance for displacement boundary conditions
+            tol_p: Tolerance for pressure boundary conditions
+        """
+        if self.all_params is None:
+            print("❌ Model not trained yet")
+            return
+            
+        # Get test points
+        test_points = self.get_test_points()
+        predictions = self.predict(test_points)
+        
+        # Extract coordinates and predictions
+        x = test_points[:, 0]
+        y = test_points[:, 1]
+        ux_pred = predictions[:, 0]
+        uy_pred = predictions[:, 1]
+        p_pred = predictions[:, 2]
+        
+        print("=== BOUNDARY CONDITION VERIFICATION ===")
+        
+        # Left boundary (x ≈ 0): u_x=0, u_y=0, p=1
+        left_mask = x <= 0.05
+        if jnp.any(left_mask):
+            ux_left_error = jnp.mean(jnp.abs(ux_pred[left_mask]))
+            uy_left_error = jnp.mean(jnp.abs(uy_pred[left_mask]))
+            p_left_mean = jnp.mean(p_pred[left_mask])
+            p_left_error = jnp.abs(p_left_mean - 1.0)
+            
+            print(f"LEFT (Injection): ux_error={ux_left_error:.4f}, uy_error={uy_left_error:.4f}, p_mean={p_left_mean:.3f}")
+            print(f"  ✅ ux≈0: {ux_left_error < tol_disp}, uy≈0: {uy_left_error < tol_disp}, p≈1: {p_left_error < tol_p}")
+        
+        # Right boundary (x ≈ 1): p=0
+        right_mask = x >= 0.95
+        if jnp.any(right_mask):
+            p_right_error = jnp.mean(jnp.abs(p_pred[right_mask]))
+            print(f"RIGHT (Production): p_error={p_right_error:.4f}")
+            print(f"  ✅ p≈0: {p_right_error < tol_p}")
+        
+        # Bottom boundary (y ≈ 0): u_y=0
+        bottom_mask = y <= 0.05
+        if jnp.any(bottom_mask):
+            uy_bottom_error = jnp.mean(jnp.abs(uy_pred[bottom_mask]))
+            print(f"BOTTOM (Bedrock): uy_error={uy_bottom_error:.4f}")
+            print(f"  ✅ uy≈0: {uy_bottom_error < tol_disp}")
+        
+        print()
+        print("=== EXPECTED PHYSICS PATTERNS ===")
+        print("✓ Pressure should decrease smoothly from left (1) to right (0)")
+        print("✓ ux should show expansion near injection, contraction near production")
+        print("✓ uy should show vertical response to pressure gradients")
+        print("✓ Overall deformation should be smooth and physically reasonable")
 
-def CoupledTrainer():
-    """Create unified coupled trainer with automatic loss balancing"""
-    return BiotCoupledTrainer(auto_balance=True)
+
+def create_physics_only_trainer():
+    """
+    Create trainer for physics-only learning (no exact solution)
+    
+    This is the recommended approach - let the PINN discover the true solution!
+    """
+    print("🛢️ RESERVOIR INJECTION - PHYSICS ONLY")
+    print("=" * 50)
+    print("BOUNDARY CONDITIONS:")
+    print("  LEFT (x=0):   Injection well - ux=0, uy=0, p=1") 
+    print("  RIGHT (x=1):  Production well - σ·n=0, p=0")
+    print("  BOTTOM (y=0): Bedrock - uy=0, ∂p/∂y=0") 
+    print("  TOP (y=1):    Cap rock - σ·n=0, ∂p/∂y=0")
+    print()
+    print("PHYSICS:")
+    print("  - Mechanics: ∇·σ' + α∇p = 0")  
+    print("  - Flow: -k∇²p + α∇·u = 0")
+    print("  - Coupling: α = 0.8")
+    print()
+    print("TRAINING:")
+    print("  - No exact solution constraint")
+    print("  - Pure physics-based learning")
+    print("  - Automatic loss balancing")
+    print("=" * 50)
+    
+    return BiotPhysicsOnlyTrainer(auto_balance=True)
+
+
+# MAIN USAGE
+if __name__ == "__main__":
+    # Create trainer
+    trainer = create_physics_only_trainer()
+    
+    # Train the model
+    print("Starting training...")
+    params = trainer.train_coupled(n_steps=2000)
+    
+    # Verify results
+    print("\nVerifying boundary conditions...")
+    trainer.verify_boundary_conditions()
+    
+    # Get some predictions for analysis
+    test_points = trainer.get_test_points()
+    predictions = trainer.predict(test_points)
+    
+    print(f"\nPredictions shape: {predictions.shape}")
+    print("Columns: [u_x, u_y, p]")
+    print("Ready for visualization!")
