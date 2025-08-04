@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 FBPINNs Colab Setup Script
-==========================
 
 This script handles the installation of FBPINNs and its dependencies on Google Colab
 in a way that minimizes restart issues and ensures all components work properly.
@@ -198,11 +197,7 @@ def main():
             check_jax_gpu()
             print()
             print("Setup completed successfully!")
-            print()
-            print("Next steps:")
-            print("1. Navigate to poroelasticity folder: %cd poroelasticity")
-            print("2. Run validation: !python run_all_validations.py --quick")
-            print("3. Or open notebook: poroelasticity/notebooks/Biot_Visualization_Hub.ipynb")
+            print(" Navigate to poroelasticity folder: %cd poroelasticity")
         else:
             print("Setup completed but import test failed")
     else:

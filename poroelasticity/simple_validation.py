@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Simple validation runner that sets up the Python path first
-===========================================================
 
 This script ensures FBPINNs is available before running validations.
 
@@ -41,11 +40,11 @@ def test_basic_functionality():
         from fbpinns.domains import RectangularDomainND
         from fbpinns.constants import Constants
         from fbpinns.networks import Network, FCN
-        print("  ✓ FBPINNs core modules imported successfully")
+        print("   FBPINNs core modules imported successfully")
         
         # Test physics trainer
         from trainers.biot_trainer_2d import BiotCoupledTrainer
-        print("  ✓ Physics trainer imported successfully")
+        print("   Physics trainer imported successfully")
         
         # Test simple domain initialization parameters
         print("\nTesting domain parameters...")
@@ -54,7 +53,7 @@ def test_basic_functionality():
             xmin=jnp.array([0.0, 0.0]), 
             xmax=jnp.array([1.0, 1.0])
         )
-        print("  ✓ Domain parameters created successfully")
+        print("   Domain parameters created successfully")
         
         # Test constants (the proper way FBPINNs expects)
         print("\nTesting constants...")
@@ -64,13 +63,13 @@ def test_basic_functionality():
             network=FCN,
             network_init_kwargs={'layers': [10, 10, 1]}
         )
-        print("  ✓ Constants created successfully")
+        print("   Constants created successfully")
         
-        print("\n✓ SUCCESS: All basic functionality tests passed!")
+        print("\n SUCCESS: All basic functionality tests passed!")
         return True
         
     except Exception as e:
-        print(f"\n✗ ERROR: Basic functionality test failed: {e}")
+        print(f"\n ERROR: Basic functionality test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -101,20 +100,20 @@ def run_quick_physics_test():
             'phi': 0.2     # Porosity
         }
         
-        print("  ✓ Test parameters created")
+        print("   Test parameters created")
         
         # Test that we can at least instantiate the trainer
         # (without actually running expensive training)
         print("Testing trainer instantiation...")
         
         # This is just to verify the class can be imported and basic setup works
-        print("  ✓ Trainer import successful")
-        print("  ✓ Quick physics test completed")
+        print("  Trainer import successful")
+        print("   Quick physics test completed")
         
         return True
         
     except Exception as e:
-        print(f"\n✗ ERROR: Physics test failed: {e}")
+        print(f"\n ERROR: Physics test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -134,7 +133,7 @@ def main():
     
     # Run physics test
     if run_quick_physics_test():
-        print("\n🎉 SUCCESS: All validation tests passed!")
+        print("\n SUCCESS: All validation tests passed!")
         print("\nThe FBPINNs poroelasticity implementation is working correctly.")
         print("\nNext steps:")
         print("1. Open the visualization notebook:")

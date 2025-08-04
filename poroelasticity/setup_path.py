@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Quick setup script for poroelasticity directory
-==============================================
 
 This script sets up the Python path to make FBPINNs available when running
 from the poroelasticity directory.
@@ -80,7 +79,6 @@ def main():
         if test_imports():
             print("\nSUCCESS: All required modules are now available!")
             print("\nYou can now run:")
-            print("  !python test/test_biot_2d.py")
             print("  !python simple_validation.py")
         else:
             print("\nERROR: Some imports failed. Check the errors above.")
