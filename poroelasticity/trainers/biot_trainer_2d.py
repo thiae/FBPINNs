@@ -274,50 +274,16 @@ class BiotCoupled2D(Problem):
             step_val = all_params.get("step", 0)
             
             # Print individual loss components for debugging "loss decreases but no learning"
-            jax.debug.print(" Loss Components [Step: {}] (wbPINN Inverse Weighting)", step_val)
+            jax.debug.print(" Loss Components [Step: {}] (HARD BC TESTING)", step_val)
             jax.debug.print("   Mechanics (PDE): {:.3e}", mechanics_loss)
             jax.debug.print("   Flow (PDE): {:.3e}", flow_loss) 
             jax.debug.print("   Boundary Conditions: {:.3e}", boundary_loss)
             jax.debug.print("   Ratio BC/PDE: {:.3f}", boundary_loss / (mechanics_loss + flow_loss + 1e-8))
         
-        if auto_balance:
-            # wbPINN APPROACH: Inverse weighting for automatic balance
-            # Theory: High loss components get reduced weights, low components get boosted
-            mech_scale = jax.lax.stop_gradient(mechanics_loss + 1e-8)
-            flow_scale = jax.lax.stop_gradient(flow_loss + 1e-8) 
-            bc_scale = jax.lax.stop_gradient(boundary_loss + 1e-8)
-            
-            # INVERSE WEIGHTING: w_i = 1/Loss_i (from wbPINN paper)
-            # Large losses (mechanics ~1e10) get tiny weights (~1e-10)
-            # Small losses (flow ~1e3) get larger weights (~1e-3)
-            auto_w_mech = 1.0 / mech_scale
-            auto_w_flow = 1.0 / flow_scale  
-            auto_w_bc = 1.0 / bc_scale
-            
-            # Normalize weights to sum to 1 (prevents scale explosion)
-            total_weight = auto_w_mech + auto_w_flow + auto_w_bc
-            auto_w_mech = auto_w_mech / total_weight
-            auto_w_flow = auto_w_flow / total_weight
-            auto_w_bc = auto_w_bc / total_weight
-            
-            # Debug: Print computed weights every 100 steps
-            jax.lax.cond(
-                step_val % 100 == 0,
-                lambda: jax.debug.print("   wbPINN weights: mech={:.2e}, flow={:.2e}, bc={:.2e}", 
-                                       auto_w_mech, auto_w_flow, auto_w_bc),
-                lambda: None
-            )
-            
-            # Apply weights with research recommended emphasis on BCs
-            total_loss = (w_mech * auto_w_mech * mechanics_loss + 
-                         w_flow * auto_w_flow * flow_loss + 
-                         w_bc * auto_w_bc * boundary_loss)
-        else:
-            # Research Improved: Manual weighting with higher BC emphasis
-            # Address spectral bias by making BCs much more prominent
-            total_loss = (w_mech * mechanics_loss + 
-                         w_flow * flow_loss + 
-                         w_bc * boundary_loss)
+        # SIMPLE LOSS: Focus on hard BC testing - no complex weighting
+        total_loss = (w_mech * mechanics_loss + 
+                     w_flow * flow_loss + 
+                     w_bc * boundary_loss)
 
         return total_loss
     
@@ -635,33 +601,7 @@ class BiotCoupledTrainer:
         print(" Gradual coupling with auto balancing completed ")
         return self.all_params
     
-    def train_wbpinn(self, n_steps=800):
-        """
-        wbPINN training with inverse loss weighting.
-        
-        Based on "Weight-Balanced Physics-Informed Neural Networks" paper.
-        Uses w_i = 1/Loss_i to automatically balance loss components.
-        Eliminates need for manual weight tuning.
-        """
-        print(" wbPINN Inverse Weighting Training to fix BC loss drowning")
-        print("Auto-balancing loss components using w_i = 1/Loss_i")
-        print("No manual weight tuning required!")
-        
-        # Enable auto-balance for wbPINN approach
-        auto_balance_orig = self.auto_balance
-        self.auto_balance = True
-        
-        # Use equal manual weights - auto-weighting will handle the rest
-        w_mech_orig, w_flow_orig, w_bc_orig = self.w_mech, self.w_flow, self.w_bc
-        self.w_mech, self.w_flow, self.w_bc = 1.0, 1.0, 1.0
-        
-        self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
-        
-        # Restore original settings
-        self.auto_balance = auto_balance_orig
-        self.w_mech, self.w_flow, self.w_bc = w_mech_orig, w_flow_orig, w_bc_orig
-        print(" wbPINN training complete!")
-        return self
+    # REMOVED: wbPINN method to focus on hard BC testing only
     
     def train_hard_bcs(self, n_steps=600):
         """
@@ -685,6 +625,7 @@ class BiotCoupledTrainer:
         
         # Use our hard BC solution instead (get from same class)
         problem_class.solution = problem_class.hard_bc_solution
+        print("   Hard BC solution method installed - BCs will be mathematically enforced")
         
         try:
             # Store original settings
@@ -1277,15 +1218,12 @@ def ResearchTrainer():
     
     Based on research from PirateNet, GradNorm, and other PINN papers.
     
-    Phase 1 - Test Hard BCs (ADAM optimizer):
+    Test Hard BC Enforcement (ADAM optimizer):
         trainer = ResearchTrainer()  # Uses ADAM for breakthrough testing
         
         trainer.train_hard_bcs(n_steps=600)                  # BREAKTHROUGH: Hard BC enforcement
-        trainer.train_wbpinn(n_steps=800)                    # Backup: wbPINN inverse weighting  
-        trainer.train_research_improved(n_steps=1500)        # Fallback: Multi-phase training
         
-    Phase 2 - Optimize with LBFGS (after hard BCs proven):
-        # Switch to LBFGS for better convergence once hard BCs work
+        # wbPINN and other methods removed to focus on hard BC testing
         
         # Diagnostics:
         trainer.diagnose_training_issues()
@@ -1296,8 +1234,7 @@ def ResearchTrainer():
     print(" Research Ready Trainer Initialized")
     print("    Architecture: 64x3 network with tanh activation")
     print("    Optimizer: ADAM (testing hard BCs first)")
-    print("    Loss monitoring: Enabled")
-    print("    BC emphasis: Aggressive enforcement")
+    print("    Focus: HARD BC ENFORCEMENT ONLY")
     print("    Ready for: train_hard_bcs() breakthrough test")
     
     return trainer
