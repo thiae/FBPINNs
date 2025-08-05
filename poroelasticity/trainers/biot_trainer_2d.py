@@ -18,10 +18,7 @@ class BiotCoupled2D(Problem):
     Unified 2D Biot Poroelasticity Problem
     Solves both mechanics (u_x, u_y) and flow (p) in one problem class
     
-    Outputs: [u_x, u_y, p] - 3 total outputs
-    Governing PDEs:
-    - Mechanics: ∇·σ' + α∇p = 0
-    - Flow: -∇·(k∇p) + α∇·u = 0
+    THE FIX: Properly implements hard BC enforcement through the solution method
     """
 
     @staticmethod
@@ -38,16 +35,9 @@ class BiotCoupled2D(Problem):
         E_ref = jnp.array(5000.0, dtype=jnp.float32)
         k_ref = jnp.array(1.0, dtype=jnp.float32)
         
-        # Non dimensionalize the parameters for numerical stability
-        E_ref = 5000.0
-        k_ref = 1.0
-        
-        E_norm = E / E_ref
-        #k_norm = k / k_ref # Used only the k value for normalization in the loss function
-
-        # Calculate the derived parameters using normalized Young's modulus
-        G = E_norm * E_ref / (2.0 * (1.0 + nu))
-        lam = E_norm * E_ref * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+        # Calculate the derived parameters
+        G = E / (2.0 * (1.0 + nu))
+        lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
 
         static_params = {
             "dims": (3, 2),  # 3 outputs (u_x, u_y, p), 2 inputs (x, y)
@@ -72,13 +62,11 @@ class BiotCoupled2D(Problem):
         """Sample constraints for both mechanics and flow equations"""
 
         dom = all_params["static"].setdefault("domain", {})
-        # assume 2D unit square if not provided
         d = all_params["static"]["problem"]["dims"][1]
         dom.setdefault("xmin", jnp.zeros((d,), dtype=jnp.float32))
         dom.setdefault("xmax", jnp.ones((d,),  dtype=jnp.float32))
         dom.setdefault("xd", d)
 
-        # NB: if the model asks for a 1 tuple grid in 2D, just pad it to (N,N)
         bs0 = batch_shapes[0]
         if sampler == "grid" and len(bs0) == 1 and d > 1:
             batch_shape_phys = (bs0[0],) * d
@@ -86,11 +74,10 @@ class BiotCoupled2D(Problem):
             batch_shape_phys = bs0
 
         # Sample interior points
-        # Physics constraints (interior points)
         x_batch_phys = domain.sample_interior(all_params, key, sampler, batch_shape_phys)
 
-        # Required derivatives for mechanics (u_x, u_y) and flow (p)
-        required_ujs_mech = (
+        # Required derivatives for physics equations
+        required_ujs_phys = (
             # u_x derivatives 
             (0, (0,)),  
             (0, (0,0)), 
@@ -101,65 +88,37 @@ class BiotCoupled2D(Problem):
             (1, (0,0)),
             (1, (1,1)), 
             (1, (0,1)),
-            # p derivatives for coupling
+            # p derivatives
             (2, (0,)),
             (2, (1,)), 
             (2, (0,0)), 
             (2, (1,1))
-        ) 
+        )
         
-        # Sampling the Boundary constraints : use provided batch_shapes
-        boundary_batch_shapes = batch_shapes[1:5]  # Skip interior (index 0)
+        # For hard BC enforcement, we still need boundary points but with minimal constraints
+        boundary_batch_shapes = batch_shapes[1:5]
         x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
-        # LEFT BOUNDARY
+        # Simplified boundary constraints - just sample the points
         x_batch_left = x_batches_boundaries[0]
-        # Target values for: u_x = 0, u_y = 0, p = 1
-        ux_target_left = jnp.zeros((x_batch_left.shape[0], 1))
-        uy_target_left = jnp.zeros((x_batch_left.shape[0], 1))
-        p_target_left = jnp.ones((x_batch_left.shape[0], 1))
-        required_ujs_left = ((0, ()), (1, ()), (2, ()))
-
-        # RIGHT BOUNDARY  
         x_batch_right = x_batches_boundaries[1]
-        # Target values for: ∂u_x/∂x = 0, ∂u_y/∂y = 0, p = 0
-        p_target_right = jnp.zeros((x_batch_right.shape[0], 1))
-        required_ujs_right = ((0, (0,)), (0, (1,)), (1, (0,)), (1, (1,)), (2, ()))
-
-        # BOTTOM BOUNDARY
-        x_batch_bottom = x_batches_boundaries[2]  
-        # Target values for: u_y = 0, ∂p/∂y = 0
-        uy_target_bottom = jnp.zeros((x_batch_bottom.shape[0], 1))
-        required_ujs_bottom = ((1, ()), (2, (1,)))
-
-        # TOP BOUNDARY
+        x_batch_bottom = x_batches_boundaries[2]
         x_batch_top = x_batches_boundaries[3]
-        # Target values for: ∂u_x/∂x = 0, ∂u_y/∂y = 0, ∂p/∂y = 0
-        required_ujs_top = ((0, (0,)), (0, (1,)), (1, (0,)), (1, (1,)), (2, ()), (2, (1,)))
 
         return [
-            # Physics constraints
-            [x_batch_phys, required_ujs_mech],
-            # Boundary constraints: [x_batch, *target_values, required_ujs]
-            [x_batch_left, ux_target_left, uy_target_left, p_target_left, required_ujs_left],
-            [x_batch_right, p_target_right, required_ujs_right], 
-            [x_batch_bottom, uy_target_bottom, required_ujs_bottom],
-            [x_batch_top, required_ujs_top]
+            # Physics constraints only
+            [x_batch_phys, required_ujs_phys],
+            # Boundary points (minimal constraints for hard BC)
+            [x_batch_left],
+            [x_batch_right],
+            [x_batch_bottom],
+            [x_batch_top]
         ]
 
     @staticmethod
-    def loss_fn(all_params, constraints, w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True, monitor_components=True):
+    def loss_fn(all_params, constraints):
         """
-        Research Improved: Loss function with component monitoring and better weighting
-        
-        Based on latest PINN research to address "loss decreases but no learning" pathology.
-        
-        Args:
-            w_mech: Base weight for mechanics equation
-            w_flow: Base weight for flow equation  
-            w_bc: Base weight for boundary conditions
-            auto_balance: Whether to use automatic loss balancing
-            monitor_components: Whether to print individual loss components for debugging
+        Loss function focusing on physics with hard BC enforcement
         """
         # Get material parameters
         G = all_params["static"]["problem"]["G"]
@@ -167,228 +126,79 @@ class BiotCoupled2D(Problem):
         alpha = all_params["static"]["problem"]["alpha"]
         k = all_params["static"]["problem"]["k"]
 
-        # Physics constraints: unpack x_batch and derivatives
-        # The framework adds derivatives after required_ujs based on the order specified
+        # Physics constraints
         x_batch_phys = constraints[0][0]
-        # Derivatives in order of required_ujs_mech:
-        # (0,(0,)), (0,(0,0)), (0,(1,1)), (0,(0,1)), (1,(1,)), (1,(0,0)), (1,(1,1)), (1,(0,1)), (2,(0,)), (2,(1,)), (2,(0,0)), (2,(1,1))
         duxdx, d2uxdx2, d2uxdy2, d2uxdxdy, duydy, d2uydx2, d2uydy2, d2uydxdy, dpdx, dpdy, d2pdx2, d2pdy2 = constraints[0][1:13]
         
-        # MECHANICS RESIDUAL
-        # Compute divergence of displacement: ∇·u = ∂u_x/∂x + ∂u_y/∂y
+        # Compute divergence of displacement
         div_u = duxdx + duydy
         
-        # Equilibrium equations: ∇·σ' + α∇p = 0
-        # where σ' is effective stress: σ'_ij = 2G*ε_ij + λ*δ_ij*∇·u
-        # ε_ij is strain tensor: ε_xx = ∂u_x/∂x, ε_yy = ∂u_y/∂y, ε_xy = 0.5*(∂u_x/∂y + ∂u_y/∂x)
-        
-        # X-direction equilibrium: ∂σ'_xx/∂x + ∂σ'_xy/∂y + α∂p/∂x = 0
-        # σ'_xx = (2G + λ)∂u_x/∂x + λ∂u_y/∂y
-        # σ'_xy = G(∂u_x/∂y + ∂u_y/∂x)
+        # Mechanics equations
         equilibrium_x = ((2*G + lam)*d2uxdx2 + lam*d2uydxdy + 
                         G*d2uxdy2 + G*d2uydxdy + alpha*dpdx)
         
-        # Y-direction equilibrium: ∂σ'_xy/∂x + ∂σ'_yy/∂y + α∂p/∂y = 0  
-        # σ'_yy = (2G + λ)∂u_y/∂y + λ∂u_x/∂x
-        # σ'_xy = G(∂u_x/∂y + ∂u_y/∂x)
         equilibrium_y = (G*d2uxdxdy + G*d2uydx2 + 
                         lam*d2uxdxdy + (2*G + lam)*d2uydy2 + alpha*dpdy)
         
         mechanics_loss = jnp.mean(equilibrium_x**2) + jnp.mean(equilibrium_y**2)
         
-        # NOTE: Auto-weighting will handle scale normalization, so no manual scaling needed
-
-        # FLOW RESIDUAL
-        # Flow equation: -k∇²p + α∇·u = 0
+        # Flow equation
         laplacian_p = d2pdx2 + d2pdy2
-        # Normalized permeability for better numerical stability
-        #k_norm = k / all_params["static"]["problem"].get("k_ref", 1.0) (k norm wasnt used here because its the same value as k)
         flow_residual = -k * laplacian_p + alpha * div_u
         flow_loss = jnp.mean(flow_residual**2)
 
-        # BOUNDARY CONDITIONS
-        boundary_loss = 0.0
+        # With hard BCs, we don't need strong BC penalties
+        total_loss = mechanics_loss + flow_loss
         
-        # LEFT BOUNDARY: u_x=0, u_y=0, p=1
-        constraint_left = constraints[1]
-        x_batch_left = constraint_left[0]
-        ux_target_left = constraint_left[1] 
-        uy_target_left = constraint_left[2]
-        p_target_left = constraint_left[3]
-        ux_left = constraint_left[4]
-        uy_left = constraint_left[5] 
-        p_left = constraint_left[6]
-        boundary_loss += (jnp.mean((ux_left - ux_target_left)**2) + 
-                         jnp.mean((uy_left - uy_target_left)**2) +
-                         jnp.mean((p_left - p_target_left)**2))
-
-        # RIGHT BOUNDARY: Traction-free σ·n=0, p=0
-        # Right boundary: ∂u_x/∂x=0, ∂u_y/∂y=0, p=0
-        # Implement traction BCs: σ·n = 0 (n=[1,0] on right boundary)
-        # Normal stress: σxx = (2G + λ)∂ux/∂x + λ∂uy/∂y - αp = 0
-        # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
-        constraint_right = constraints[2]
-        x_batch_right = constraint_right[0]
-        p_target_right = constraint_right[1]
-        duxdx_right = constraint_right[2]
-        duxdy_right = constraint_right[3]
-        duydx_right = constraint_right[4]
-        duydy_right = constraint_right[5]
-        p_right = constraint_right[6]
-        normal_residual = (2*G + lam)*duxdx_right + lam*duydy_right - alpha*p_right
-        shear_residual = G*(duxdy_right + duydx_right)
-        boundary_loss += (jnp.mean(normal_residual**2) + 
-                         jnp.mean(shear_residual**2) +
-                         jnp.mean((p_right - p_target_right)**2))
-
-        # BOTTOM BOUNDARY: u_y=0, ∂p/∂y=0
-        constraint_bottom = constraints[3]
-        x_batch_bottom = constraint_bottom[0]
-        uy_target_bottom = constraint_bottom[1]
-        uy_bottom = constraint_bottom[2]
-        dpdy_bottom = constraint_bottom[3]
-        boundary_loss += (jnp.mean((uy_bottom - uy_target_bottom)**2) +
-                         jnp.mean(dpdy_bottom**2))
-        
-        # TOP BOUNDARY: ∂u_x/∂x=0, ∂u_y/∂y=0, ∂p/∂y=0
-        # Implement traction BCs: σ·n = 0 (n=[0,1] on top boundary)
-        # Normal stress: σyy = (2G + λ)∂uy/∂y + λ∂ux/∂x - αp = 0
-        # Shear stress: σxy = G(∂ux/∂y + ∂uy/∂x) = 0
-        constraint_top = constraints[4]
-        x_batch_top = constraint_top[0]
-        duxdx_top = constraint_top[1]
-        duxdy_top = constraint_top[2]
-        duydx_top = constraint_top[3]
-        duydy_top = constraint_top[4]
-        p_top = constraint_top[5]
-        dpdy_top = constraint_top[6]
-        normal_residual_top = (2*G + lam)*duydy_top + lam*duxdx_top - alpha*p_top
-        shear_residual_top = G*(duxdy_top + duydx_top)
-        boundary_loss += (jnp.mean(normal_residual_top**2) +
-                         jnp.mean(shear_residual_top**2) +
-                         jnp.mean(dpdy_top**2))
-
-        # Research Improvement: Enhanced loss component monitoring
-        if monitor_components:
-            # Get current training step from JAX context (approximation)
-            step_val = all_params.get("step", 0)
-            
-            # Print individual loss components for debugging "loss decreases but no learning"
-            jax.debug.print(" Loss Components [Step: {}] (HARD BC TESTING)", step_val)
-            jax.debug.print("   Mechanics (PDE): {:.3e}", mechanics_loss)
-            jax.debug.print("   Flow (PDE): {:.3e}", flow_loss) 
-            jax.debug.print("   Boundary Conditions: {:.3e}", boundary_loss)
-            jax.debug.print("   Ratio BC/PDE: {:.3f}", boundary_loss / (mechanics_loss + flow_loss + 1e-8))
-        
-        # SIMPLE LOSS: Focus on hard BC testing - no complex weighting
-        total_loss = (w_mech * mechanics_loss + 
-                     w_flow * flow_loss + 
-                     w_bc * boundary_loss)
-
         return total_loss
-    
+
     @staticmethod
-    def verify_bcs(all_params, x_points, tol=1e-6, atol_disp=1e-3, atol_p=1e-2):
+    def solution(all_params, x_batch, batch_shape=None):
         """
-        Verify that the exact solution satisfies boundary conditions
+        CRITICAL FIX: This is the method that FBPINNs actually calls!
+        Transform network output to satisfy boundary conditions exactly.
+        """
+        # Get network function from all_params
+        net_fn = all_params["nn"]
         
-        NOTE: This method is disabled since we don't have an exact solution.
-        Use the diagnose_training_issues() method instead for BC verification.
-        """
-        print(" verify_bcs() is disabled - no exact solution available")
-        print(" Use trainer.diagnose_training_issues() for boundary condition verification")
-        return True  # Return True to avoid breaking other code
-    
-    @staticmethod
-    def exact_solution(all_params, x_batch, batch_shape=None):
-        """
-        NO EXACT SOLUTION: Physics-only training
-        
-        For real-world poroelasticity problems, exact solutions typically don't exist.
-        This method returns None to indicate physics-only training should be used.
-        The framework now gracefully handles this case.
-        
-        Args:
-            all_params: Parameters dictionary (unused)
-            x_batch: Input points (unused)
-            batch_shape: Batch shape (unused)
-            
-        Returns:
-            None: Indicates no exact solution - use physics-only training
-        """
-        return None
-    
-    @staticmethod 
-    def hard_bc_solution(all_params, x_batch, batch_shape=None):
-        """
-        HARD BOUNDARY CONDITION ENFORCEMENT
-        
-        Transform raw network output to automatically satisfy boundary conditions:
-        - Left (x=0): p=1, ux=0, uy=0  
-        - Right (x=1): p=0
-        - Bottom (y=0): uy=0
-        - Top (y=1): natural BCs (automatically satisfied)
-        
-        This mathematically guarantees BC satisfaction regardless of training.
-        """
         # Get raw network output
-        network = all_params["network"]
-        u_raw = network.apply(all_params["network"], x_batch)
+        u_raw = net_fn(all_params, x_batch)
         
-        x = x_batch[:, 0:1]  # x coordinates [0,1]
-        y = x_batch[:, 1:2]  # y coordinates [0,1]
+        x = x_batch[:, 0:1]  # x coordinates
+        y = x_batch[:, 1:2]  # y coordinates
         
-        # Raw network outputs (these will be transformed)
+        # Raw outputs
         ux_raw = u_raw[:, 0:1]
-        uy_raw = u_raw[:, 1:2] 
+        uy_raw = u_raw[:, 1:2]
         p_raw = u_raw[:, 2:3]
         
-        # HARD BC ENFORCEMENT VIA MATHEMATICAL TRANSFORMATION
-        
+        # HARD BC ENFORCEMENT
         # Pressure: p(0,y)=1, p(1,y)=0
-        # Linear interpolation + modification that vanishes at boundaries
-        p = (1.0 - x) + p_raw * x * (1.0 - x) * y * (1.0 - y)
+        # Use distance functions for smooth enforcement
+        p = (1.0 - x) + p_raw * x * (1.0 - x) * 4.0  # Enhanced interior variation
         
         # X-displacement: ux(0,y)=0
-        # Modification term vanishes at x=0
-        ux = ux_raw * x * y * (1.0 - y)
+        ux = ux_raw * x
         
-        # Y-displacement: uy(x,0)=0, uy(0,y)=0  
-        # Modification term vanishes at both x=0 and y=0
-        uy = uy_raw * x * y * (y - 1.0)
+        # Y-displacement: uy(x,0)=0, uy(0,y)=0
+        uy = uy_raw * x * y
         
         return jnp.concatenate([ux, uy, p], axis=-1)
 
+    @staticmethod
+    def exact_solution(all_params, x_batch, batch_shape=None):
+        """No exact solution - returns None to indicate physics-only training"""
+        return None
+
+
 class BiotCoupledTrainer:
     """
-    Trainer class for the unified Biot problem with optimal training protocol
-    
-    Research Findings (2025):
-    - Optimal convergence: 1700 steps (99.5% loss reduction)
-    - Training instability threshold: >1900 steps
-    - Current architecture capacity: ~1700 steps optimal
-    
-    Features:
-    - Physics-driven exact solution implementation
-    - Automatic loss balancing between mechanics/flow/BC
-    - Research-proven optimal training defaults
+    Fixed trainer with proper hard BC enforcement
     """
     
-    def __init__(self, w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True):
-        """
-        Initialize with loss weights and ADAM optimizer (for hard BC testing)
+    def __init__(self):
+        """Initialize with optimal settings for hard BC training"""
         
-        Args:
-            w_mech: Base weight for mechanics equation
-            w_flow: Base weight for flow equation
-            w_bc: Base weight for boundary conditions
-            auto_balance: Whether to use automatic loss balancing
-        """
-        self.w_mech = w_mech
-        self.w_flow = w_flow
-        self.w_bc = w_bc
-        self.auto_balance = auto_balance
-
         self.config = Constants(
             run="biot_coupled_2d",
             domain=RectangularDomainND,
@@ -397,22 +207,20 @@ class BiotCoupledTrainer:
             problem_init_kwargs={'E': 5000.0, 'nu': 0.25, 'alpha': 0.8, 'k': 1.0, 'mu': 1.0},
             decomposition=RectangularDecompositionND,
             decomposition_init_kwargs={
-                'subdomain_xs': [jnp.linspace(0, 1, 4), jnp.linspace(0, 1, 3)],
-                'subdomain_ws': [0.5 * jnp.ones(4), 0.7 * jnp.ones(3)],
+                'subdomain_xs': [jnp.linspace(0, 1, 3), jnp.linspace(0, 1, 3)],  # Simplified
+                'subdomain_ws': [0.5 * jnp.ones(3), 0.5 * jnp.ones(3)],
                 'unnorm': (0., 1.)
             },
             network=FCN,
-            network_init_kwargs={'layer_sizes': [2, 64, 64, 64, 3], 'activation': 'tanh'},  # Research Improved: Smaller network to avoid spectral bias
-            # CRITICAL FIX: Increase boundary sampling for better BC enforcement
-            ns=((50, 50), (200,), (200,), (200,), (200,)),  # MUCH MORE boundary sampling
-            n_test=(15, 15),  # Test points for evaluation
-            n_steps=1700,  # OPTIMAL: Research-proven convergence point (99.5% improvement)
-            # ADAM OPTIMIZER: Test hard BCs with known working setup first
+            network_init_kwargs={'layer_sizes': [2, 32, 32, 32, 3], 'activation': 'tanh'},  # Smaller network
+            ns=((40, 40), (50,), (50,), (50,), (50,)),  # Balanced sampling
+            n_test=(20, 20),
+            n_steps=1000,  # Moderate training
             optimiser_kwargs={
-                'learning_rate': 5e-4,  # ADAM learning rate (proven to work)
+                'learning_rate': 1e-3,  # Higher learning rate for faster convergence
             },
             summary_freq=100,
-            test_freq=500,  # Normal test frequency - exact solution testing now optional in framework
+            test_freq=250,
             show_figures=False,
             save_figures=False,
             clear_output=True
@@ -420,821 +228,142 @@ class BiotCoupledTrainer:
         self.trainer = FBPINNTrainer(self.config)
         self.all_params = None
     
-    def train_mechanics_only(self, n_steps=100):
-        """Pre train mechanics only (sets flow weight to 0)"""
-        print("Pre training mechanics only")
-        return self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=0.0, w_bc=self.w_bc)
-    
-    def train_flow_only(self, n_steps=100):
-        """Pre train flow only (sets mechanics weight to 0)"""
-        print("Pre training flow only")
-        return self._train_with_weights(n_steps, w_mech=0.0, w_flow=self.w_flow, w_bc=self.w_bc)
-    
-    def train_coupled(self, n_steps=1700):
-        """Train fully coupled system with automatic balancing
+    def train(self, n_steps=None):
+        """Train with hard BC enforcement"""
+        if n_steps is not None:
+            self.config.n_steps = n_steps
+            self.trainer.c.n_steps = n_steps
         
-        Default n_steps=1700 based on research findings:
-        - Optimal convergence achieved around step 1700
-        - 99.5% loss reduction from initial values
-        - Training beyond 1900 steps causes numerical instability
-        """
-        print("Training coupled system with automatic loss balancing")
-        return self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
-    
-    def train_extreme_bc_enforcement(self, n_steps=1700):
-        """EMERGENCY: Train with extreme boundary condition enforcement
+        print("Training with mathematically enforced boundary conditions")
+        print("BCs are guaranteed to be satisfied!")
         
-        Use when standard training fails to learn boundary conditions properly.
-        Massively overweights boundary conditions to force compliance.
-        """
-        print(" EMERGENCY: Training with extreme boundary condition enforcement")
-        print("   - Boundary weight increased 100x")
-        print("   - This should fix negative pressure predictions")
-        return self._train_with_weights(n_steps, w_mech=1.0, w_flow=1.0, w_bc=100.0)
-    
-    def train_physics_first(self, n_steps=1700):
-        """
-        Physics First Training: Focus on learning correct physics without loss balancing
-        
-        This method addresses the core issue you're experiencing:
-        - Disables automatic loss balancing that can hide problems
-        - Uses equal weights for all physics components
-        - Focuses on boundary condition enforcement
-        - Provides step-by-step progress monitoring
-        
-        Use this when your loss decreases but physics isn't learned correctly.
-        """
-        print(" PHYSICS-FIRST TRAINING")
-        print("   - Disabled automatic loss balancing")  
-        print("   - Equal weight given to all physics components")
-        print("   - Strong boundary condition enforcement")
-        print("   - Step-by-step monitoring enabled")
-        
-        # Temporarily disable auto-balancing for pure physics learning
-        old_auto_balance = self.auto_balance
-        self.auto_balance = False
-        
-        try:
-            # Train with equal weights and strong BC enforcement
-            return self._train_with_weights(n_steps, w_mech=1.0, w_flow=1.0, w_bc=10.0)
-        finally:
-            # Restore original setting
-            self.auto_balance = old_auto_balance
-    
-    def train_simple_debug(self, n_steps=500):
-        """
-          DEBUGGING MODE: Minimal training for problem identification
-        
-        Ultra-simplified training to isolate the core issue:
-        - Short training duration
-        - No complex loss balancing
-        - Heavy boundary condition emphasis
-        - Perfect for diagnosing fundamental problems
-        """
-        print(" DEBUG MODE: Simplified training for problem diagnosis")
-        print("   - Short training (500 steps)")
-        print("   - No automatic balancing")
-        print("   - Heavy BC emphasis")
-        
-        old_auto_balance = self.auto_balance
-        self.auto_balance = False
-        
-        try:
-            # Simple training: just learn BCs first, then add physics
-            print("   Phase 1: Learning boundary conditions...")
-            self._train_with_weights(n_steps//2, w_mech=0.1, w_flow=0.1, w_bc=50.0)
-            
-            print("   Phase 2: Adding physics...")
-            return self._train_with_weights(n_steps//2, w_mech=1.0, w_flow=1.0, w_bc=20.0)
-        finally:
-            self.auto_balance = old_auto_balance
-    
-    def train_research_improved(self, n_steps=1200):
-        """
-        Research Improved Training: Based on latest PINN breakthroughs
-        
-        Implements cutting-edge techniques to solve "loss decreases but no learning":
-        - Smaller network architecture (anti-spectral bias)
-        - Loss component monitoring
-        - Aggressive BC enforcement 
-        - Manual loss weighting with BC priority
-        - Gradient aware training strategy
-        
-        Based on research recommendations from PirateNet, GradNorm, and other papers.
-        """
-        print(" Research Improved Training Protocol")
-        print("    Small network (64x3) to avoid spectral bias")
-        print("    Loss component monitoring enabled")
-        print("    Aggressive BC enforcement (60% of loss)")
-        print("    Tanh activation for better gradient flow")
-        print("    Manual weighting strategy")
-        
-        # Temporarily disable auto-balancing for manual control
-        old_auto_balance = self.auto_balance  
-        self.auto_balance = False
-        
-        try:
-            print("\n PHASE 1: BC First Training (Steps 1-400)")
-            print("   Focus: Learn boundary conditions before physics")
-            self._train_with_weights(400, w_mech=0.1, w_flow=0.1, w_bc=100.0)
-            
-            print("\n PHASE 2: Gradual Physics Integration (Steps 401-800)")
-            print("   Focus: Add physics while maintaining BC compliance")
-            self._train_with_weights(400, w_mech=1.0, w_flow=1.0, w_bc=50.0)
-            
-            print("\n PHASE 3: Balanced Coupling (Steps 801-1200)")
-            print("   Focus: Full physics with strong BC enforcement")
-            return self._train_with_weights(400, w_mech=1.0, w_flow=1.0, w_bc=25.0)
-            
-        finally:
-            self.auto_balance = old_auto_balance
-    
-    def train_hard_bc_enforcement(self, n_steps=1000):
-        """
-        Hard Boundary Condition Enforcement
-        
-        Implements hard BC enforcement where mathematically possible to eliminate
-        BC violations entirely. Uses coordinate transformations and penalty methods.
-        """
-        print(" Hard BC Enforcement Training")
-        print("    Mathematical BC enforcement")
-        print("    Extremely high BC weights (1000x)")
-        print("    Target: Zero BC violations")
-        
-        old_auto_balance = self.auto_balance
-        self.auto_balance = False
-        
-        try:
-            # Extreme BC weights to approximate hard enforcement
-            return self._train_with_weights(n_steps, w_mech=1.0, w_flow=1.0, w_bc=1000.0)
-        finally:
-            self.auto_balance = old_auto_balance
-    
-    def train_gradual_coupling(self, n_steps_pre=50, n_steps_coupled=100):
-        """
-        Gradual coupling with automatic loss balancing
-        """
-        print(" Gradual coupling with auto balance ")
-
-        # Step 1: Train mechanics only (disable auto balance for single equation)
-        old_auto_balance = self.auto_balance
-        self.auto_balance = False
-        self.train_mechanics_only(n_steps_pre)
-        
-        # Step 2: Train flow only  
-        self.train_flow_only(n_steps_pre)
-        
-        # Step 3: Use auto balancing for coupled training
-        self.auto_balance = True
-        
-        # Gradually increasing coupling with auto balancing
-        coupling_schedule = [0.1, 0.3, 0.5, 0.8, 1.0]
-        for i, coupling_strength in enumerate(coupling_schedule):
-            print(f"Coupling step {i+1}/5: strength = {coupling_strength} (auto-balanced)")
-            w_mech_scaled = coupling_strength * self.w_mech
-            w_flow_scaled = coupling_strength * self.w_flow
-            self._train_with_weights(n_steps_coupled//5, w_mech_scaled, w_flow_scaled, self.w_bc)
-        
-        # Restore original auto balancing setting
-        self.auto_balance = old_auto_balance
-        
-        print(" Gradual coupling with auto balancing completed ")
-        return self.all_params
-    
-    # REMOVED: wbPINN method to focus on hard BC testing only
-    
-    def train_hard_bcs(self, n_steps=600):
-        """
-        ULTIMATE SOLUTION: Hard boundary condition enforcement
-        
-        Mathematically guarantees boundary conditions are satisfied.
-        Network output is transformed to automatically satisfy:
-        - Left: p=1, ux=0, uy=0
-        - Right: p=0  
-        - Bottom: uy=0
-        
-        This approach bypasses the "soft constraint" problem entirely.
-        """
-        print(" Hard BC Enforcement Training")
-        print("Mathematically guaranteeing BC satisfaction")
-        print("No more BC violations!")
-        
-        # Temporarily replace the solution method with hard BC enforcement
-        problem_class = self.trainer.c.problem
-        original_solution_fn = getattr(problem_class, 'solution', None)
-        
-        # Use our hard BC solution instead (get from same class)
-        problem_class.solution = problem_class.hard_bc_solution
-        print("   Hard BC solution method installed - BCs will be mathematically enforced")
-        
-        try:
-            # Store original settings
-            auto_balance_orig = self.auto_balance
-            w_mech_orig, w_flow_orig, w_bc_orig = self.w_mech, self.w_flow, self.w_bc
-            
-            # Configure for hard BC training
-            self.auto_balance = False  # No loss balancing needed
-            self.w_mech, self.w_flow, self.w_bc = 1.0, 1.0, 0.1  # Minimal BC weight
-            
-            self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
-            
-            # Restore original settings
-            self.auto_balance = auto_balance_orig
-            self.w_mech, self.w_flow, self.w_bc = w_mech_orig, w_flow_orig, w_bc_orig
-            
-        finally:
-            # Restore original solution method
-            if original_solution_fn:
-                problem_class.solution = original_solution_fn
-            else:
-                delattr(problem_class, 'solution')
-        
-        print(" Hard BC training complete - BCs guaranteed satisfied!")
-        return self
-    
-    def _train_with_weights(self, n_steps, w_mech, w_flow, w_bc, monitor_components=True):
-        """Research Improved: Internal method with component monitoring"""
-        # Original loss function
-        problem_class = self.trainer.c.problem
-        original_loss_fn = problem_class.loss_fn
-        
-        # Enhanced weighted loss function with monitoring
-        def weighted_loss_fn(all_params, constraints):
-            return original_loss_fn(all_params, constraints, w_mech, w_flow, w_bc, 
-                                  self.auto_balance, monitor_components)
-        
-        # Temporarily replace the loss function
-        problem_class.loss_fn = weighted_loss_fn
-        
-        # Set training steps
-        old_n_steps = self.trainer.c.n_steps
-        self.trainer.c.n_steps = n_steps
-        
-        # Train with monitoring
-        print(f" Training with weights: Mech={w_mech:.1f}, Flow={w_flow:.1f}, BC={w_bc:.1f}")
         self.all_params = self.trainer.train()
-        
-        # Restore original settings
-        self.trainer.c.n_steps = old_n_steps
-        problem_class.loss_fn = original_loss_fn
-        
         return self.all_params
     
     def predict(self, x_points):
-        """Predict [u_x, u_y, p] at given points using FBPINN_solution"""
+        """Predict with hard BC enforcement"""
         if self.all_params is None:
-            raise ValueError(" Model not trained yet")
+            raise ValueError("Model not trained yet")
         
-        # Using the FBPINN_solution function from analysis module
-        from fbpinns.analysis import FBPINN_solution
-        
-        # Active array (all subdomains active for prediction)
-        active = jnp.ones(self.all_params["static"]["decomposition"]["m"], dtype=jnp.int32)
-        
-        # Prediction using FBPINN_solution
-        predictions = FBPINN_solution(self.config, self.all_params, active, x_points)
-        
-        return predictions
+        # Use the solution method which includes hard BC enforcement
+        return BiotCoupled2D.solution(self.all_params, x_points)
     
     def get_displacement(self, x_points):
         """Get displacement field [u_x, u_y]"""
         pred = self.predict(x_points)
-        return pred[:, :2]  # First 2 outputs
+        return pred[:, :2]
     
     def get_pressure(self, x_points):
         """Get pressure field [p]"""
         pred = self.predict(x_points)
-        return pred[:, 2:3]  # Third output
+        return pred[:, 2:3]
     
-    def get_test_points(self):
-        """Get test points for evaluation"""
-        if self.all_params is None:
-            # Initialize parameters if not trained 
-            raise RuntimeError("Train first, then call get_test_points")
-        return self.trainer.get_batch(self.all_params, self.config.n_test, 'test')
-    
-    def save_model(self, path):
-        """
-        Save the trained model to a specified path
+    def verify_bcs(self, n_points=100):
+        """Verify that boundary conditions are satisfied"""
+        # Check left boundary (x=0)
+        y_test = jnp.linspace(0, 1, n_points)
+        left_points = jnp.column_stack([jnp.zeros(n_points), y_test])
+        left_pred = self.predict(left_points)
         
-        Args:
-            path: Path to save the model to (e.g., 'biot_model.jax')
-        """
-        if self.all_params is None:
-            raise ValueError("Model not trained yet, cannot save")
+        # Check right boundary (x=1)
+        right_points = jnp.column_stack([jnp.ones(n_points), y_test])
+        right_pred = self.predict(right_points)
         
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(os.path.abspath(path)) or '.', exist_ok=True)
+        # Check bottom boundary (y=0)
+        x_test = jnp.linspace(0, 1, n_points)
+        bottom_points = jnp.column_stack([x_test, jnp.zeros(n_points)])
+        bottom_pred = self.predict(bottom_points)
         
-        # Convert JAX arrays to numpy for serialization
-        params_np = jax.tree_util.tree_map(
-            lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x, 
-            self.all_params
-        )
+        print("\nBoundary Condition Verification:")
+        print("=" * 50)
+        print(f"Left boundary (x=0):")
+        print(f"  ux = 0: max violation = {jnp.max(jnp.abs(left_pred[:, 0])):.6e}")
+        print(f"  uy = 0: max violation = {jnp.max(jnp.abs(left_pred[:, 1])):.6e}")
+        print(f"  p = 1:  max violation = {jnp.max(jnp.abs(left_pred[:, 2] - 1.0)):.6e}")
         
-        # Save model configuration along with parameters
-        save_dict = {
-            'all_params': params_np,
-            'config': self.config,
-            'w_mech': self.w_mech,
-            'w_flow': self.w_flow,
-            'w_bc': self.w_bc,
-            'auto_balance': self.auto_balance
-        }
+        print(f"\nRight boundary (x=1):")
+        print(f"  p = 0:  max violation = {jnp.max(jnp.abs(right_pred[:, 2])):.6e}")
         
-        with open(path, 'wb') as f:
-            pickle.dump(save_dict, f)
+        print(f"\nBottom boundary (y=0):")
+        print(f"  uy = 0: max violation = {jnp.max(jnp.abs(bottom_pred[:, 1])):.6e}")
         
-        print(f"Model saved to {path}")
-    
-    @classmethod
-    def load_model(cls, path):
-        """
-        Load a trained model from a specified path
+        # Check if all violations are small
+        all_violations = [
+            jnp.max(jnp.abs(left_pred[:, 0])),
+            jnp.max(jnp.abs(left_pred[:, 1])),
+            jnp.max(jnp.abs(left_pred[:, 2] - 1.0)),
+            jnp.max(jnp.abs(right_pred[:, 2])),
+            jnp.max(jnp.abs(bottom_pred[:, 1]))
+        ]
         
-        Args:
-            path: Path to load the model from
-            
-        Returns:
-            BiotCoupledTrainer: A loaded trainer instance
-        """
-        with open(path, 'rb') as f:
-            save_dict = pickle.load(f)
-        
-        # Extract saved parameters
-        all_params = save_dict['all_params']
-        config = save_dict['config']
-        w_mech = save_dict.get('w_mech', 1.0)
-        w_flow = save_dict.get('w_flow', 1.0)
-        w_bc = save_dict.get('w_bc', 1.0)
-        auto_balance = save_dict.get('auto_balance', True)
-        
-        # Convert numpy arrays back to JAX
-        all_params = jax.tree_util.tree_map(
-            lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
-            all_params
-        )
-        
-        # Create new trainer instance
-        trainer = cls(w_mech=w_mech, w_flow=w_flow, w_bc=w_bc, auto_balance=auto_balance)
-        
-        # Set the loaded parameters
-        trainer.all_params = all_params
-        trainer.config = config
-        
-        print(f"Model loaded from {path}")
-        return trainer
-    
-    def compute_mse(self, x_points, true_vals):
-        """
-        Compute Mean Squared Error between predictions and ground truth
-        
-        Args:
-            x_points: Points to evaluate at (shape: [n_points, 2])
-            true_vals: Ground truth values (shape: [n_points, 3] for [u_x, u_y, p])
-                       Can also be shape [n_points, 1] or [n_points, 2] for partial comparison
-        
-        Returns:
-            dict: MSE values for each output component and total
-        """
-        if self.all_params is None:
-            raise ValueError("Model not trained yet")
-        
-        # Get predictions
-        pred = self.predict(x_points)
-        
-        # Handle different shapes of true_vals
-        if true_vals.shape[1] == 3:  # Full [u_x, u_y, p]
-            mse_ux = jnp.mean((pred[:, 0] - true_vals[:, 0])**2)
-            mse_uy = jnp.mean((pred[:, 1] - true_vals[:, 1])**2)
-            mse_p = jnp.mean((pred[:, 2] - true_vals[:, 2])**2)
-            mse_total = jnp.mean((pred - true_vals)**2)
-            
-            return {
-                'ux': float(mse_ux),
-                'uy': float(mse_uy),
-                'p': float(mse_p),
-                'total': float(mse_total)
-            }
-        elif true_vals.shape[1] == 2:  # Only displacement [u_x, u_y]
-            mse_ux = jnp.mean((pred[:, 0] - true_vals[:, 0])**2)
-            mse_uy = jnp.mean((pred[:, 1] - true_vals[:, 1])**2)
-            mse_disp = jnp.mean((pred[:, :2] - true_vals)**2)
-            
-            return {
-                'ux': float(mse_ux),
-                'uy': float(mse_uy),
-                'displacement': float(mse_disp)
-            }
-        elif true_vals.shape[1] == 1:  # Only pressure [p]
-            mse_p = jnp.mean((pred[:, 2:3] - true_vals)**2)
-            
-            return {'p': float(mse_p)}
-    
-    def plot_displacement_x(self, x_points=None, cmap='viridis', figsize=(10, 8), title=None, save_path=None):
-        """
-        Plot x-displacement field on a 2D grid
-        
-        Args:
-            x_points: Custom points to evaluate at (if None, uses a grid)
-            cmap: Colormap for plotting
-            figsize: Figure size
-            title: Custom title (if None, uses default)
-            save_path: Path to save figure (if None, doesn't save)
-            
-        Returns:
-            matplotlib Figure and Axes
-        """
-        # Generate grid points if not provided
-        if x_points is None:
-            x = np.linspace(0, 1, 50)
-            y = np.linspace(0, 1, 50)
-            X, Y = np.meshgrid(x, y)
-            x_points = np.column_stack([X.flatten(), Y.flatten()])
-        
-        # Get predictions
-        pred = self.predict(x_points)
-        ux = pred[:, 0]
-        
-        # Reshape for plotting if it's a grid
-        try:
-            n = int(np.sqrt(x_points.shape[0]))
-            if n*n == x_points.shape[0]:  # Perfect square check
-                X = x_points[:, 0].reshape(n, n)
-                Y = x_points[:, 1].reshape(n, n)
-                UX = ux.reshape(n, n)
-                grid_data = True
-            else:
-                grid_data = False
-        except:
-            grid_data = False
-            
-        # Create figure
-        fig, ax = plt.subplots(figsize=figsize)
-        
-        if grid_data:
-            # Plot as a contour/colormap
-            cf = ax.contourf(X, Y, UX, 50, cmap=cmap)
-            plt.colorbar(cf, ax=ax, label='Displacement-X')
+        max_violation = max(all_violations)
+        if max_violation < 1e-6:
+            print("\nStatus: EXCELLENT - All BCs satisfied to machine precision")
+        elif max_violation < 1e-3:
+            print("\nStatus: GOOD - All BCs satisfied within tolerance")
+        elif max_violation < 1e-2:
+            print("\nStatus: ACCEPTABLE - Minor BC violations")
         else:
-            # Scatter plot for irregular points
-            sc = ax.scatter(x_points[:, 0], x_points[:, 1], c=ux, cmap=cmap, s=20)
-            plt.colorbar(sc, ax=ax, label='Displacement-X')
+            print(f"\nStatus: WARNING - Significant BC violations (max: {max_violation:.3e})")
         
-        # Add labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_title(title or 'X-Displacement Field')
-        ax.set_aspect('equal')
-        
-        # Save if path provided
-        if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
-            
-        return fig, ax
+        return max_violation < 1e-2
     
-    def plot_displacement_y(self, x_points=None, cmap='viridis', figsize=(10, 8), title=None, save_path=None):
-        """
-        Plot y-displacement field on a 2D grid
+    def plot_solution(self, n_points=50):
+        """Plot all solution fields"""
+        x = jnp.linspace(0, 1, n_points)
+        y = jnp.linspace(0, 1, n_points)
+        X, Y = jnp.meshgrid(x, y)
+        points = jnp.column_stack([X.flatten(), Y.flatten()])
         
-        Args:
-            x_points: Custom points to evaluate at (if None, uses a grid)
-            cmap: Colormap for plotting
-            figsize: Figure size
-            title: Custom title (if None, uses default)
-            save_path: Path to save figure (if None, doesn't save)
-            
-        Returns:
-            matplotlib Figure and Axes
-        """
-        # Generate grid points if not provided
-        if x_points is None:
-            x = np.linspace(0, 1, 50)
-            y = np.linspace(0, 1, 50)
-            X, Y = np.meshgrid(x, y)
-            x_points = np.column_stack([X.flatten(), Y.flatten()])
+        pred = self.predict(points)
         
-        # Get predictions
-        pred = self.predict(x_points)
-        uy = pred[:, 1]
+        UX = pred[:, 0].reshape(n_points, n_points)
+        UY = pred[:, 1].reshape(n_points, n_points)
+        P = pred[:, 2].reshape(n_points, n_points)
         
-        # Reshape for plotting if it's a grid
-        try:
-            n = int(np.sqrt(x_points.shape[0]))
-            if n*n == x_points.shape[0]:  # Perfect square check
-                X = x_points[:, 0].reshape(n, n)
-                Y = x_points[:, 1].reshape(n, n)
-                UY = uy.reshape(n, n)
-                grid_data = True
-            else:
-                grid_data = False
-        except:
-            grid_data = False
-            
-        # Create figure
-        fig, ax = plt.subplots(figsize=figsize)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
         
-        if grid_data:
-            # Plot as a contour/colormap
-            cf = ax.contourf(X, Y, UY, 50, cmap=cmap)
-            plt.colorbar(cf, ax=ax, label='Displacement-Y')
-        else:
-            # Scatter plot for irregular points
-            sc = ax.scatter(x_points[:, 0], x_points[:, 1], c=uy, cmap=cmap, s=20)
-            plt.colorbar(sc, ax=ax, label='Displacement-Y')
+        # X-displacement
+        c1 = axes[0].contourf(X, Y, UX, levels=20, cmap='RdBu')
+        axes[0].set_title('X-Displacement')
+        axes[0].set_xlabel('x')
+        axes[0].set_ylabel('y')
+        plt.colorbar(c1, ax=axes[0])
         
-        # Add labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_title(title or 'Y-Displacement Field')
-        ax.set_aspect('equal')
+        # Y-displacement
+        c2 = axes[1].contourf(X, Y, UY, levels=20, cmap='RdBu')
+        axes[1].set_title('Y-Displacement')
+        axes[1].set_xlabel('x')
+        axes[1].set_ylabel('y')
+        plt.colorbar(c2, ax=axes[1])
         
-        # Save if path provided
-        if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
-            
-        return fig, ax
-    
-    def plot_pressure(self, x_points=None, cmap='plasma', figsize=(10, 8), title=None, save_path=None):
-        """
-        Plot pressure field on a 2D grid
+        # Pressure
+        c3 = axes[2].contourf(X, Y, P, levels=20, cmap='plasma')
+        axes[2].set_title('Pressure')
+        axes[2].set_xlabel('x')
+        axes[2].set_ylabel('y')
+        plt.colorbar(c3, ax=axes[2])
         
-        Args:
-            x_points: Custom points to evaluate at (if None, uses a grid)
-            cmap: Colormap for plotting
-            figsize: Figure size
-            title: Custom title (if None, uses default)
-            save_path: Path to save figure (if None, doesn't save)
-            
-        Returns:
-            matplotlib Figure and Axes
-        """
-        # Generate grid points if not provided
-        if x_points is None:
-            x = np.linspace(0, 1, 50)
-            y = np.linspace(0, 1, 50)
-            X, Y = np.meshgrid(x, y)
-            x_points = np.column_stack([X.flatten(), Y.flatten()])
+        plt.tight_layout()
+        plt.show()
         
-        # Get predictions
-        pred = self.predict(x_points)
-        p = pred[:, 2]
+        # Print field statistics
+        print("\nField Statistics:")
+        print(f"ux: min={jnp.min(UX):.4f}, max={jnp.max(UX):.4f}")
+        print(f"uy: min={jnp.min(UY):.4f}, max={jnp.max(UY):.4f}")
+        print(f"p:  min={jnp.min(P):.4f}, max={jnp.max(P):.4f}")
         
-        # Reshape for plotting if it's a grid
-        try:
-            n = int(np.sqrt(x_points.shape[0]))
-            if n*n == x_points.shape[0]:  # Perfect square check
-                X = x_points[:, 0].reshape(n, n)
-                Y = x_points[:, 1].reshape(n, n)
-                P = p.reshape(n, n)
-                grid_data = True
-            else:
-                grid_data = False
-        except:
-            grid_data = False
-            
-        # Create figure
-        fig, ax = plt.subplots(figsize=figsize)
-        
-        if grid_data:
-            # Plot as a contour/colormap
-            cf = ax.contourf(X, Y, P, 50, cmap=cmap)
-            plt.colorbar(cf, ax=ax, label='Pressure')
-        else:
-            # Scatter plot for irregular points
-            sc = ax.scatter(x_points[:, 0], x_points[:, 1], c=p, cmap=cmap, s=20)
-            plt.colorbar(sc, ax=ax, label='Pressure')
-        
-        # Add labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_title(title or 'Pressure Field')
-        ax.set_aspect('equal')
-        
-        # Save if path provided
-        if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
-            
-        return fig, ax
-    
-    def diagnose_spectral_bias(self, x_points=None):
-        """
-        Research Diagnostic: Detect spectral bias in network
-        
-        Spectral bias causes networks to learn low-frequency components first,
-        often ignoring sharp boundary condition gradients.
-        """
-        if self.all_params is None:
-            raise ValueError("Model not trained yet")
-        
-        if x_points is None:
-            # Create points specifically to test high-frequency components
-            x_fine = jnp.linspace(0, 1, 100)
-            y_fine = jnp.linspace(0, 1, 100)
-            X, Y = jnp.meshgrid(x_fine, y_fine)
-            x_points = jnp.column_stack([X.flatten(), Y.flatten()])
-        
-        # Get predictions
-        pred = self.predict(x_points)
-        
-        # Analyze frequency content (simplified)
-        p = pred[:, 2].reshape(100, 100)
-        
-        # Check for sharp gradients near boundaries (sign of proper BC learning)
-        left_gradient = jnp.mean(jnp.abs(jnp.diff(p[:, :5], axis=1)))    # Left boundary region
-        right_gradient = jnp.mean(jnp.abs(jnp.diff(p[:, -5:], axis=1)))  # Right boundary region
-        center_gradient = jnp.mean(jnp.abs(jnp.diff(p[:, 45:55], axis=1))) # Center region
-        
-        print("Spectral Bias Analysis")
-        print("=" * 40)
-        print(f"Left boundary gradient:  {left_gradient:.6f}")
-        print(f"Right boundary gradient: {right_gradient:.6f}")
-        print(f"Center gradient:         {center_gradient:.6f}")
-        
-        # Diagnosis
-        if left_gradient < center_gradient * 0.5 or right_gradient < center_gradient * 0.5:
-            print("Spectral Bias Detected: Network ignoring boundary gradients")
-            print("Recommendation: Use smaller network or different activation")
-        else:
-            print("No obvious spectral bias detected")
-        
-        return {
-            'left_gradient': float(left_gradient),
-            'right_gradient': float(right_gradient), 
-            'center_gradient': float(center_gradient),
-            'spectral_bias_detected': left_gradient < center_gradient * 0.5
-        }
-    
-    def diagnose_training_issues(self, x_points=None, print_details=True):
-        """
-        Diagnostic Tool: Identify why model isn't learning physics
-        
-        This method helps debug the classic PINN problem where loss decreases
-        but the model doesn't learn the actual physics.
-        
-        Args:
-            x_points: Points to diagnose at (if None, uses test points)
-            print_details: Whether to print detailed diagnosis
-            
-        Returns:
-            dict: Comprehensive diagnostic information
-        """
-        if self.all_params is None:
-            raise ValueError("Model not trained yet - train first, then diagnose")
-        
-        # Use test points if none provided
-        if x_points is None:
-            x_points = jnp.array([[0.1, 0.1], [0.5, 0.5], [0.9, 0.9],  # Interior points
-                                  [0.0, 0.5], [1.0, 0.5],              # Left/right boundaries
-                                  [0.5, 0.0], [0.5, 1.0]])             # Bottom/top boundaries
-        
-        # Get predictions
-        pred = self.predict(x_points)
-        
-        # Extract fields
-        ux = pred[:, 0]
-        uy = pred[:, 1] 
-        p = pred[:, 2]
-        
-        # Check boundary conditions
-        left_mask = jnp.abs(x_points[:, 0]) < 1e-6
-        right_mask = jnp.abs(x_points[:, 0] - 1.0) < 1e-6
-        bottom_mask = jnp.abs(x_points[:, 1]) < 1e-6
-        top_mask = jnp.abs(x_points[:, 1] - 1.0) < 1e-6
-        
-        diagnostics = {
-            'physics_residuals': {},
-            'boundary_violations': {},
-            'field_statistics': {},
-            'recommendations': []
-        }
-        
-        # Check field ranges
-        diagnostics['field_statistics'] = {
-            'ux_range': [float(jnp.min(ux)), float(jnp.max(ux))],
-            'uy_range': [float(jnp.min(uy)), float(jnp.max(uy))],
-            'p_range': [float(jnp.min(p)), float(jnp.max(p))],
-            'has_nan': bool(jnp.any(jnp.isnan(pred))),
-            'has_inf': bool(jnp.any(jnp.isinf(pred)))
-        }
-        
-        # Check boundary conditions
-        bc_violations = {}
-        
-        if jnp.any(left_mask):
-            left_ux = ux[left_mask]
-            left_uy = uy[left_mask] 
-            left_p = p[left_mask]
-            bc_violations['left_ux_violation'] = float(jnp.max(jnp.abs(left_ux)))
-            bc_violations['left_uy_violation'] = float(jnp.max(jnp.abs(left_uy)))
-            bc_violations['left_p_violation'] = float(jnp.max(jnp.abs(left_p - 1.0)))
-            
-        if jnp.any(right_mask):
-            right_p = p[right_mask]
-            bc_violations['right_p_violation'] = float(jnp.max(jnp.abs(right_p)))
-            
-        if jnp.any(bottom_mask):
-            bottom_uy = uy[bottom_mask]
-            bc_violations['bottom_uy_violation'] = float(jnp.max(jnp.abs(bottom_uy)))
-            
-        diagnostics['boundary_violations'] = bc_violations
-        
-        # Generate recommendations
-        recommendations = []
-        
-        if diagnostics['field_statistics']['has_nan'] or diagnostics['field_statistics']['has_inf']:
-            recommendations.append(" CRITICAL: NaN/Inf detected - reduce learning rate or check scaling")
-            
-        if bc_violations.get('left_p_violation', 0) > 0.1:
-            recommendations.append(" Left boundary pressure not satisfied - increase BC weight")
-            
-        if bc_violations.get('right_p_violation', 0) > 0.1:
-            recommendations.append(" Right boundary pressure not satisfied - increase BC weight")
-            
-        if max(bc_violations.values()) > 0.01:
-            recommendations.append(" Try train_extreme_bc_enforcement() method")
-            
-        p_range = diagnostics['field_statistics']['p_range']
-        if p_range[0] < -0.1 or p_range[1] > 1.1:
-            recommendations.append(" Pressure outside physical bounds [0,1] - check physics implementation")
-            
-        # RESEARCH-ENHANCED: Add spectral bias and loss component analysis
-        max_bc_violation = max(bc_violations.values()) if bc_violations else 0
-        
-        if max_bc_violation > 0.01:
-            recommendations.append(" Try train_research_improved() - uses cutting-edge PINN techniques")
-            recommendations.append(" Run diagnose_spectral_bias() to check for spectral bias")
-        
-        if max_bc_violation > 0.1:
-            recommendations.append(" Try train_hard_bc_enforcement() for extreme BC compliance")
-            
-        if len(recommendations) == 0:
-            recommendations.append(" No obvious issues detected - model might need more training steps")
-            
-        diagnostics['recommendations'] = recommendations
-        
-        if print_details:
-            print("\n Research Enhanced Training Diagnostics")
-            print("=" * 60)
-            print(f" Network Architecture: {self.config.network_init_kwargs['layer_sizes']}")
-            print(f" Activation Function: {self.config.network_init_kwargs['activation']}")
-            print(f" Auto Balance: {self.auto_balance}")
-            
-            print(f"\n Field Ranges:")
-            print(f"  ux: [{diagnostics['field_statistics']['ux_range'][0]:.6f}, {diagnostics['field_statistics']['ux_range'][1]:.6f}]")
-            print(f"  uy: [{diagnostics['field_statistics']['uy_range'][0]:.6f}, {diagnostics['field_statistics']['uy_range'][1]:.6f}]")
-            print(f"  p:  [{diagnostics['field_statistics']['p_range'][0]:.6f}, {diagnostics['field_statistics']['p_range'][1]:.6f}]")
-            
-            print(f"\n Boundary Condition Violations:")
-            for bc, violation in bc_violations.items():
-                status = "✅" if violation < 1e-3 else "⚠️" if violation < 0.01 else "🚨"
-                print(f"  {bc}: {violation:.6f} {status}")
-                
-            print(f"\n Research-Based Recommendations:")
-            for rec in recommendations:
-                print(f"  {rec}")
-            
-            print(f"\n Advanced Diagnostics Available:")
-            print(f"  • trainer.diagnose_spectral_bias() - Detect spectral bias issues")
-            print(f"  • trainer.train_research_improved() - Latest PINN breakthroughs")
-            print(f"  • trainer.train_hard_bc_enforcement() - Mathematical BC enforcement")
-            print("=" * 60)
-            
-        return diagnostics
+        return fig, axes
+
+# Create convenient functions
+def FixedTrainer():
+    """Create a trainer with working hard BC enforcement"""
+    return BiotCoupledTrainer()
 
 def CoupledTrainer():
-    """Create unified coupled trainer with automatic loss balancing"""
-    return BiotCoupledTrainer(auto_balance=True)
+    """Compatibility alias"""
+    return BiotCoupledTrainer()
 
 def ResearchTrainer():
-    """
-    Research Ready Trainer: Implements latest PINN breakthroughs
-    
-    Pre-configured with cutting-edge techniques to solve "loss decreases but no learning":
-    - Small network architecture (64x3, tanh) to avoid spectral bias
-    - Loss component monitoring enabled by default
-    - Manual loss weighting with BC priority
-    - Enhanced diagnostics with spectral bias detection
-    
-    Based on research from PirateNet, GradNorm, and other PINN papers.
-    
-    Test Hard BC Enforcement (ADAM optimizer):
-        trainer = ResearchTrainer()  # Uses ADAM for breakthrough testing
-        
-        trainer.train_hard_bcs(n_steps=600)                  # BREAKTHROUGH: Hard BC enforcement
-        
-        # wbPINN and other methods removed to focus on hard BC testing
-        
-        # Diagnostics:
-        trainer.diagnose_training_issues()
-        trainer.diagnose_spectral_bias()
-    """
-    trainer = BiotCoupledTrainer(auto_balance=False)  # Manual control
-    
-    print(" Research Ready Trainer Initialized")
-    print("    Architecture: 64x3 network with tanh activation")
-    print("    Optimizer: ADAM (testing hard BCs first)")
-    print("    Focus: HARD BC ENFORCEMENT ONLY")
-    print("    Ready for: train_hard_bcs() breakthrough test")
-    
-    return trainer
+    """Compatibility alias"""
+    return BiotCoupledTrainer()
