@@ -195,6 +195,11 @@ class BiotCoupled2D(Problem):
                         lam*d2uxdxdy + (2*G + lam)*d2uydy2 + alpha*dpdy)
         
         mechanics_loss = jnp.mean(equilibrium_x**2) + jnp.mean(equilibrium_y**2)
+        
+        # RESIDUAL NORMALIZATION: Scale mechanics to prevent loss scale imbalance
+        # Mechanics PDE naturally produces ~1e7 residuals while BCs are ~1e5
+        # Scale down mechanics by 1e-3 to bring it to same magnitude as BCs
+        mechanics_loss = mechanics_loss * 1e-3
 
         # FLOW RESIDUAL
         # Flow equation: -k∇²p + α∇·u = 0
@@ -272,7 +277,7 @@ class BiotCoupled2D(Problem):
             step_val = all_params.get("step", 0)
             
             # Print individual loss components for debugging "loss decreases but no learning"
-            jax.debug.print(" LOSS COMPONENTS [Step: {}]", step_val)
+            jax.debug.print(" Loss Components [Step: {}] (Mechanics Normalized by 1e-3)", step_val)
             jax.debug.print("   Mechanics (PDE): {:.3e}", mechanics_loss)
             jax.debug.print("   Flow (PDE): {:.3e}", flow_loss) 
             jax.debug.print("   Boundary Conditions: {:.3e}", boundary_loss)
@@ -487,7 +492,7 @@ class BiotCoupledTrainer:
     
     def train_physics_first(self, n_steps=1700):
         """
-        PHYSICS-FIRST TRAINING: Focus on learning correct physics without loss balancing
+        Physics First Training: Focus on learning correct physics without loss balancing
         
         This method addresses the core issue you're experiencing:
         - Disables automatic loss balancing that can hide problems
@@ -1134,11 +1139,11 @@ class BiotCoupledTrainer:
             recommendations.append(" Right boundary pressure not satisfied - increase BC weight")
             
         if max(bc_violations.values()) > 0.01:
-            recommendations.append("🔧 Try train_extreme_bc_enforcement() method")
+            recommendations.append(" Try train_extreme_bc_enforcement() method")
             
         p_range = diagnostics['field_statistics']['p_range']
         if p_range[0] < -0.1 or p_range[1] > 1.1:
-            recommendations.append("🔧 Pressure outside physical bounds [0,1] - check physics implementation")
+            recommendations.append(" Pressure outside physical bounds [0,1] - check physics implementation")
             
         # RESEARCH-ENHANCED: Add spectral bias and loss component analysis
         max_bc_violation = max(bc_violations.values()) if bc_violations else 0
@@ -1208,7 +1213,7 @@ def ResearchTrainer():
     """
     trainer = BiotCoupledTrainer(auto_balance=False)  # Manual control
     
-    print(" RESEARCH-READY TRAINER INITIALIZED")
+    print(" Research Ready Trainer Initialized")
     print("    Architecture: 64x3 network with tanh activation")
     print("    Loss monitoring: Enabled")
     print("    BC emphasis: Aggressive enforcement")
