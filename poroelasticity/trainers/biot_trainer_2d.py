@@ -196,10 +196,7 @@ class BiotCoupled2D(Problem):
         
         mechanics_loss = jnp.mean(equilibrium_x**2) + jnp.mean(equilibrium_y**2)
         
-        # RESIDUAL NORMALIZATION: Scale mechanics to prevent loss scale imbalance
-        # Mechanics PDE naturally produces ~1e7 residuals while BCs are ~1e5
-        # Scale down mechanics by 1e-3 to bring it to same magnitude as BCs
-        mechanics_loss = mechanics_loss * 1e-3
+        # NOTE: Auto-weighting will handle scale normalization, so no manual scaling needed
 
         # FLOW RESIDUAL
         # Flow equation: -k∇²p + α∇·u = 0
@@ -277,7 +274,7 @@ class BiotCoupled2D(Problem):
             step_val = all_params.get("step", 0)
             
             # Print individual loss components for debugging "loss decreases but no learning"
-            jax.debug.print(" Loss Components [Step: {}] (Mechanics Normalized by 1e-3)", step_val)
+            jax.debug.print(" Loss Components [Step: {}] (Auto Weighting Corrected)", step_val)
             jax.debug.print("   Mechanics (PDE): {:.3e}", mechanics_loss)
             jax.debug.print("   Flow (PDE): {:.3e}", flow_loss) 
             jax.debug.print("   Boundary Conditions: {:.3e}", boundary_loss)
@@ -295,10 +292,19 @@ class BiotCoupled2D(Problem):
             target_flow_ratio = 0.20   # Reduced: Let BC dominate more  
             target_bc_ratio = 0.60     # DOUBLED: Strong BC enforcement!
             
-            # Compute automatic weights with improved scaling
+            # Compute automatic weights with corrected scaling
+            # Each weight = target_ratio / typical_scale (to normalize losses)
             auto_w_mech = target_mech_ratio / mech_scale
-            auto_w_flow = target_flow_ratio * mech_scale / flow_scale
-            auto_w_bc = target_bc_ratio * mech_scale / bc_scale
+            auto_w_flow = target_flow_ratio / flow_scale  # FIXED: removed erroneous mech_scale
+            auto_w_bc = target_bc_ratio / bc_scale        # FIXED: removed erroneous mech_scale
+            
+            # Debug: Print computed weights every 100 steps
+            jax.lax.cond(
+                step_val % 100 == 0,
+                lambda: jax.debug.print("   Auto-weights: mech={:.2e}, flow={:.2e}, bc={:.2e}", 
+                                       auto_w_mech, auto_w_flow, auto_w_bc),
+                lambda: None
+            )
             
             # Apply weights with research recommended emphasis on BCs
             total_loss = (w_mech * auto_w_mech * mechanics_loss + 
@@ -343,61 +349,6 @@ class BiotCoupled2D(Problem):
             None: Indicates no exact solution - use physics-only training
         """
         return None
-    
-    # @staticmethod
-    # def exact_solution_old(all_params, x_batch, batch_shape=None):
-    #     """
-    #     CORRECTED: Physically consistent analytical solution
-        
-    #     Strategy: Build solution that satisfies ALL boundary conditions 
-    #     and physics equations simultaneously
-    #     """
-    #     static_params = all_params["static"]["problem"]
-    #     alpha = static_params["alpha"]
-    #     k = static_params["k"]
-    #     G = static_params["G"]
-    #     lam = static_params["lam"]
-        
-    #     x = x_batch[:, 0]
-    #     y = x_batch[:, 1]
-
-    #     # PRESSURE: Keep linear solution p = 1 - x
-    #     # This satisfies: p(0)=1, p(1)=0, ∇²p=0
-    #     p = (1.0 - x).reshape(-1, 1)
-        
-    #     # DISPLACEMENT: Design to satisfy ALL constraints
-        
-    #     # Key insight: We need uy(x,0) = 0 for ALL x (bottom boundary)
-    #     # AND uy(0,y) = 0 for ALL y (left boundary)
-    #     # This means uy must be proportional to BOTH x and y: uy ∝ x*y
-        
-    #     # For ux: Must satisfy ux(0,y) = 0 (left boundary)
-    #     # Can be proportional to x: ux ∝ x*f(y)
-        
-    #     # CORRECTED DISPLACEMENT FIELD:
-    #     # Design to satisfy boundary conditions EXACTLY
-        
-    #     # ux: Zero at x=0, reasonable physics elsewhere
-    #     # Use: ux = A * x * (1-x) * g(y) where g(y) ensures proper physics
-    #     A = alpha / (8.0 * G + 4.0 * lam)  # Scaling factor
-    #     ux = A * x * (1.0 - x) * (1.0 + 0.2 * y * (1.0 - y))
-        
-    #     # uy: MUST be zero at x=0 AND y=0
-    #     # Use: uy = B * x * y * h(x,y) 
-    #     B = -alpha / (12.0 * G + 6.0 * lam)  # Scaling factor
-    #     uy = B * x * y * (2.0 - x) * (1.0 - 0.3 * y)
-        
-    #     # This ensures:
-    #     # - ux(0,y) = 0 ✓ (left boundary)
-    #     # - uy(0,y) = 0 ✓ (left boundary) 
-    #     # - uy(x,0) = 0 ✓ (bottom boundary)
-    #     # - Reasonable physics in interior ✓
-        
-    #     ux = ux.reshape(-1, 1)
-    #     uy = uy.reshape(-1, 1)
-
-    #     return jnp.hstack([ux, uy, p])
-
 class BiotCoupledTrainer:
     """
     Trainer class for the unified Biot problem with optimal training protocol
