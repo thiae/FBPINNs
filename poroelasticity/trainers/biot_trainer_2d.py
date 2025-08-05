@@ -654,7 +654,7 @@ class BiotCoupledTrainer:
         w_mech_orig, w_flow_orig, w_bc_orig = self.w_mech, self.w_flow, self.w_bc
         self.w_mech, self.w_flow, self.w_bc = 1.0, 1.0, 1.0
         
-        super().train(n_steps=n_steps)
+        self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
         
         # Restore original settings
         self.auto_balance = auto_balance_orig
@@ -714,7 +714,7 @@ class BiotCoupledTrainer:
                 }
                 print("   Switched to LBFGS optimizer")
             
-            super().train(n_steps=n_steps)
+            self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
             
             # Restore original settings
             self.auto_balance = auto_balance_orig
