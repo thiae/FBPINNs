@@ -410,7 +410,7 @@ class BiotCoupledTrainer:
     
     def __init__(self, w_mech=1.0, w_flow=1.0, w_bc=1.0, auto_balance=True):
         """
-        Initialize with loss weights
+        Initialize with loss weights and ADAM optimizer (for hard BC testing)
         
         Args:
             w_mech: Base weight for mechanics equation
@@ -441,8 +441,9 @@ class BiotCoupledTrainer:
             ns=((50, 50), (200,), (200,), (200,), (200,)),  # MUCH MORE boundary sampling
             n_test=(15, 15),  # Test points for evaluation
             n_steps=1700,  # OPTIMAL: Research-proven convergence point (99.5% improvement)
+            # ADAM OPTIMIZER: Test hard BCs with known working setup first
             optimiser_kwargs={
-                'learning_rate': 5e-4,  # REDUCED: Lower learning rate for stability
+                'learning_rate': 5e-4,  # ADAM learning rate (proven to work)
             },
             summary_freq=100,
             test_freq=500,  # Normal test frequency - exact solution testing now optional in framework
@@ -662,7 +663,7 @@ class BiotCoupledTrainer:
         print(" wbPINN training complete!")
         return self
     
-    def train_hard_bcs(self, n_steps=600, use_lbfgs=True):
+    def train_hard_bcs(self, n_steps=600):
         """
         ULTIMATE SOLUTION: Hard boundary condition enforcement
         
@@ -673,15 +674,9 @@ class BiotCoupledTrainer:
         - Bottom: uy=0
         
         This approach bypasses the "soft constraint" problem entirely.
-        
-        Args:
-            n_steps: Number of training steps  
-            use_lbfgs: If True, uses LBFGS optimizer (better for PINNs)
         """
         print(" Hard BC Enforcement Training")
         print("Mathematically guaranteeing BC satisfaction")
-        if use_lbfgs:
-            print("Using LBFGS optimizer (research recommended)")
         print("No more BC violations!")
         
         # Temporarily replace the solution method with hard BC enforcement
@@ -700,29 +695,11 @@ class BiotCoupledTrainer:
             self.auto_balance = False  # No loss balancing needed
             self.w_mech, self.w_flow, self.w_bc = 1.0, 1.0, 0.1  # Minimal BC weight
             
-            # Switch to LBFGS if requested
-            if use_lbfgs:
-                original_optimizer = self.trainer.c.optimiser
-                original_optimizer_kwargs = self.trainer.c.optimiser_kwargs
-                
-                # LBFGS configuration (research-backed)
-                import optax
-                self.trainer.c.optimiser = optax.lbfgs
-                self.trainer.c.optimiser_kwargs = {
-                    'memory_size': 10,
-                    'step_size': 1e-3
-                }
-                print("   Switched to LBFGS optimizer")
-            
             self._train_with_weights(n_steps, w_mech=self.w_mech, w_flow=self.w_flow, w_bc=self.w_bc)
             
             # Restore original settings
             self.auto_balance = auto_balance_orig
             self.w_mech, self.w_flow, self.w_bc = w_mech_orig, w_flow_orig, w_bc_orig
-            
-            if use_lbfgs:
-                self.trainer.c.optimiser = original_optimizer
-                self.trainer.c.optimiser_kwargs = original_optimizer_kwargs
             
         finally:
             # Restore original solution method
@@ -1300,12 +1277,15 @@ def ResearchTrainer():
     
     Based on research from PirateNet, GradNorm, and other PINN papers.
     
-    Available Methods:
-        trainer = ResearchTrainer()
+    Phase 1 - Test Hard BCs (ADAM optimizer):
+        trainer = ResearchTrainer()  # Uses ADAM for breakthrough testing
         
-        trainer.train_hard_bcs(n_steps=600, use_lbfgs=True)  # ULTIMATE: Hard BC + LBFGS
+        trainer.train_hard_bcs(n_steps=600)                  # BREAKTHROUGH: Hard BC enforcement
         trainer.train_wbpinn(n_steps=800)                    # Backup: wbPINN inverse weighting  
         trainer.train_research_improved(n_steps=1500)        # Fallback: Multi-phase training
+        
+    Phase 2 - Optimize with LBFGS (after hard BCs proven):
+        # Switch to LBFGS for better convergence once hard BCs work
         
         # Diagnostics:
         trainer.diagnose_training_issues()
@@ -1315,8 +1295,9 @@ def ResearchTrainer():
     
     print(" Research Ready Trainer Initialized")
     print("    Architecture: 64x3 network with tanh activation")
+    print("    Optimizer: ADAM (testing hard BCs first)")
     print("    Loss monitoring: Enabled")
     print("    BC emphasis: Aggressive enforcement")
-    print("    Ready for: train_research_improved()")
+    print("    Ready for: train_hard_bcs() breakthrough test")
     
     return trainer
