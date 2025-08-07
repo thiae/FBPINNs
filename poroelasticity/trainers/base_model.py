@@ -215,11 +215,11 @@ class BiotCoupledTrainer:
                 'unnorm': (0., 1.)
             },
             network=FCN,
-            network_init_kwargs={'layer_sizes': [2, 32, 32, 32, 3], 'activation': 'tanh'},
-            ns=((50, 50), (50,), (50,), (50,), (50,)),
+            network_init_kwargs={'layer_sizes': [2, 64, 64, 64, 3], 'activation': 'tanh'},
+            ns=((100, 100), (50,), (50,), (50,), (50,)),
             n_test=(20, 20),
-            n_steps=1500,  # Increased for better convergence
-            optimiser_kwargs={'learning_rate': 5e-4},  # Slightly lower for stability
+            n_steps=5000,  # Increased for better convergence
+            optimiser_kwargs={'learning_rate': 1e-3},  
             summary_freq=100,
             test_freq=250,
             show_figures=False,
@@ -977,130 +977,142 @@ class BiotCoupledTrainer:
         
         return fig, axes
     
-    def visualize_domain_decomposition(self):
-        """
-        Visualize the FBPINN domain decomposition with subdomain boundaries and overlaps.
-        """
-        print("\n" + "="*60)
-        print("FBPINN DOMAIN DECOMPOSITION")
-        print("="*60)
-        
-        # Get decomposition parameters
-        decomp = self.all_params["static"]["decomposition"]
-        m = decomp["m"]  # Total number of subdomains
-        
-        # Get subdomain parameters
-        subdomain_xs = self.config.decomposition_init_kwargs['subdomain_xs']
-        subdomain_ws = self.config.decomposition_init_kwargs['subdomain_ws']
-        
-        # Create figure
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Left plot: Subdomain boundaries
-        ax1 = axes[0]
-        
-        # Get x and y divisions
-        x_divs = subdomain_xs[0]
-        y_divs = subdomain_xs[1]
-        wx = subdomain_ws[0][0]  # Assuming uniform weights
-        wy = subdomain_ws[1][0]
-        
-        # Plot the main domain
-        ax1.add_patch(plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor='black', linewidth=2))
-        
-        # Plot subdomain centers and boundaries
-        colors = plt.cm.Set3(np.linspace(0, 1, m))
-        subdomain_idx = 0
-        
-        for i, x_center in enumerate(x_divs):
-            for j, y_center in enumerate(y_divs):
-                # Calculate subdomain boundaries with overlap
-                x_min = max(0, x_center - wx/2)
-                x_max = min(1, x_center + wx/2)
-                y_min = max(0, y_center - wy/2)
-                y_max = min(1, y_center + wy/2)
-                
-                # Plot subdomain
-                rect = plt.Rectangle((x_min, y_min), x_max-x_min, y_max-y_min, 
-                                    fill=True, facecolor=colors[subdomain_idx], 
-                                    alpha=0.3, edgecolor=colors[subdomain_idx], 
-                                    linewidth=1.5)
-                ax1.add_patch(rect)
-                
-                # Add subdomain number
-                ax1.text(x_center, y_center, f'{subdomain_idx+1}', 
-                        ha='center', va='center', fontsize=12, fontweight='bold')
-                
-                # Mark center point
-                ax1.plot(x_center, y_center, 'ko', markersize=6)
-                
-                subdomain_idx += 1
-        
-        ax1.set_xlim(-0.05, 1.05)
-        ax1.set_ylim(-0.05, 1.05)
-        ax1.set_xlabel('x')
-        ax1.set_ylabel('y')
-        ax1.set_title(f'FBPINN Decomposition ({m} subdomains)')
-        ax1.set_aspect('equal')
-        ax1.grid(True, alpha=0.3)
-        
-        # Right plot: Overlap visualization
-        ax2 = axes[1]
-        
-        # Create overlap intensity map
-        overlap_map = np.zeros((100, 100))
-        x_grid = np.linspace(0, 1, 100)
-        y_grid = np.linspace(0, 1, 100)
-        
-        for i, x_center in enumerate(x_divs):
-            for j, y_center in enumerate(y_divs):
-                x_min = max(0, x_center - wx/2)
-                x_max = min(1, x_center + wx/2)
-                y_min = max(0, y_center - wy/2)
-                y_max = min(1, y_center + wy/2)
-                
-                # Find grid points in this subdomain
-                x_mask = (x_grid >= x_min) & (x_grid <= x_max)
-                y_mask = (y_grid >= y_min) & (y_grid <= y_max)
-                
-                for xi in np.where(x_mask)[0]:
-                    for yi in np.where(y_mask)[0]:
-                        overlap_map[yi, xi] += 1
-        
-        im = ax2.imshow(overlap_map, extent=[0, 1, 0, 1], origin='lower', 
-                        cmap='YlOrRd', aspect='equal')
-        ax2.set_xlabel('x')
-        ax2.set_ylabel('y')
-        ax2.set_title('Subdomain Overlap (Number of overlapping subdomains)')
-        plt.colorbar(im, ax=ax2, label='Number of subdomains')
-        
-        # Add grid lines at subdomain boundaries
-        for x in x_divs:
-            ax2.axvline(x, color='black', linestyle='--', alpha=0.3)
-        for y in y_divs:
-            ax2.axhline(y, color='black', linestyle='--', alpha=0.3)
-        
-        # Print decomposition info
-        print(f"Total subdomains: {m}")
-        print(f"X-direction splits: {len(x_divs)} at {x_divs}")
-        print(f"Y-direction splits: {len(y_divs)} at {y_divs}")
-        print(f"Subdomain width (x): {wx:.2f}")
-        print(f"Subdomain width (y): {wy:.2f}")
-        print(f"Overlap parameter: {(wx - 1/len(x_divs)):.2f} in x, {(wy - 1/len(y_divs)):.2f} in y")
-        
-        # Calculate overlap statistics
-        unique_overlaps = np.unique(overlap_map)
-        print(f"\nOverlap statistics:")
-        for overlap_count in unique_overlaps:
-            coverage = np.sum(overlap_map == overlap_count) / overlap_map.size * 100
-            print(f"  {int(overlap_count)} subdomain(s): {coverage:.1f}% of domain")
-        
-        plt.tight_layout()
-        plt.show()
-        
-        print("="*60)
-        
-        return fig, axes
+    def visualize_domain_decomposition(self, save_path=None):
+      """
+      Visualize the FBPINN domain decomposition with subdomain boundaries and overlaps.
+      Can be called before or after training.
+      
+      Args:
+          save_path: Optional path to save the figure (e.g., 'domain_decomposition.png')
+      
+      Returns:
+          fig, axes: Matplotlib figure and axes objects
+      """
+      print("\n" + "="*60)
+      print("FBPINN DOMAIN DECOMPOSITION")
+      print("="*60)
+      
+      # Get subdomain parameters from config (available before training)
+      subdomain_xs = self.config.decomposition_init_kwargs['subdomain_xs']
+      subdomain_ws = self.config.decomposition_init_kwargs['subdomain_ws']
+      
+      # Calculate total number of subdomains
+      m = len(subdomain_xs[0]) * len(subdomain_xs[1])
+      
+      # Create figure
+      fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+      
+      # Left plot: Subdomain boundaries
+      ax1 = axes[0]
+      
+      # Get x and y divisions
+      x_divs = subdomain_xs[0]
+      y_divs = subdomain_xs[1]
+      wx = subdomain_ws[0][0]  # Assuming uniform weights
+      wy = subdomain_ws[1][0]
+      
+      # Plot the main domain
+      ax1.add_patch(plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor='black', linewidth=2))
+      
+      # Plot subdomain centers and boundaries
+      colors = plt.cm.Set3(np.linspace(0, 1, m))
+      subdomain_idx = 0
+      
+      for i, x_center in enumerate(x_divs):
+          for j, y_center in enumerate(y_divs):
+              # Calculate subdomain boundaries with overlap
+              x_min = max(0, float(x_center - wx/2))
+              x_max = min(1, float(x_center + wx/2))
+              y_min = max(0, float(y_center - wy/2))
+              y_max = min(1, float(y_center + wy/2))
+              
+              # Plot subdomain
+              rect = plt.Rectangle((x_min, y_min), x_max-x_min, y_max-y_min, 
+                                  fill=True, facecolor=colors[subdomain_idx], 
+                                  alpha=0.3, edgecolor=colors[subdomain_idx], 
+                                  linewidth=1.5)
+              ax1.add_patch(rect)
+              
+              # Add subdomain number
+              ax1.text(float(x_center), float(y_center), f'{subdomain_idx+1}', 
+                      ha='center', va='center', fontsize=12, fontweight='bold')
+              
+              # Mark center point
+              ax1.plot(float(x_center), float(y_center), 'ko', markersize=6)
+              
+              subdomain_idx += 1
+      
+      ax1.set_xlim(-0.05, 1.05)
+      ax1.set_ylim(-0.05, 1.05)
+      ax1.set_xlabel('x')
+      ax1.set_ylabel('y')
+      ax1.set_title(f'FBPINN Decomposition ({m} subdomains)')
+      ax1.set_aspect('equal')
+      ax1.grid(True, alpha=0.3)
+      
+      # Right plot: Overlap visualization
+      ax2 = axes[1]
+      
+      # Create overlap intensity map
+      overlap_map = np.zeros((100, 100))
+      x_grid = np.linspace(0, 1, 100)
+      y_grid = np.linspace(0, 1, 100)
+      
+      for i, x_center in enumerate(x_divs):
+          for j, y_center in enumerate(y_divs):
+              x_min = max(0, float(x_center - wx/2))
+              x_max = min(1, float(x_center + wx/2))
+              y_min = max(0, float(y_center - wy/2))
+              y_max = min(1, float(y_center + wy/2))
+              
+              # Find grid points in this subdomain
+              x_mask = (x_grid >= x_min) & (x_grid <= x_max)
+              y_mask = (y_grid >= y_min) & (y_grid <= y_max)
+              
+              for xi in np.where(x_mask)[0]:
+                  for yi in np.where(y_mask)[0]:
+                      overlap_map[yi, xi] += 1
+      
+      im = ax2.imshow(overlap_map, extent=[0, 1, 0, 1], origin='lower', 
+                      cmap='YlOrRd', aspect='equal')
+      ax2.set_xlabel('x')
+      ax2.set_ylabel('y')
+      ax2.set_title('Subdomain Overlap (Number of overlapping subdomains)')
+      plt.colorbar(im, ax=ax2, label='Number of subdomains')
+      
+      # Add grid lines at subdomain boundaries
+      for x in x_divs:
+          ax2.axvline(float(x), color='black', linestyle='--', alpha=0.3)
+      for y in y_divs:
+          ax2.axhline(float(y), color='black', linestyle='--', alpha=0.3)
+      
+      # Print decomposition info
+      print(f"Total subdomains: {m}")
+      print(f"X-direction splits: {len(x_divs)} at positions: {[float(x) for x in x_divs]}")
+      print(f"Y-direction splits: {len(y_divs)} at positions: {[float(y) for y in y_divs]}")
+      print(f"Subdomain width (x): {float(wx):.2f}")
+      print(f"Subdomain width (y): {float(wy):.2f}")
+      print(f"Overlap parameter: {float(wx - 1/len(x_divs)):.2f} in x, {float(wy - 1/len(y_divs)):.2f} in y")
+      
+      # Calculate overlap statistics
+      unique_overlaps = np.unique(overlap_map)
+      print(f"\nOverlap statistics:")
+      for overlap_count in unique_overlaps:
+          coverage = np.sum(overlap_map == overlap_count) / overlap_map.size * 100
+          print(f"  {int(overlap_count)} subdomain(s): {coverage:.1f}% of domain")
+      
+      plt.tight_layout()
+      
+      # Save the figure if path is provided
+      if save_path:
+          plt.savefig(save_path, dpi=150, bbox_inches='tight')
+          print(f"\nDomain decomposition figure saved to: {save_path}")
+      
+      plt.show()
+      
+      print("="*60)
+      
+      return fig, axes
     
     def save_checkpoint(self, filepath):
         """Save model checkpoint."""
