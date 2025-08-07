@@ -1,3 +1,15 @@
+"""
+Biot Poroelasticity Model - Primary Implementation
+
+This module provides the implementation of classes for solving 
+2D Biot poroelasticity problems using Physics-Informed Neural Networks 
+with domain decomposition (FBPINNs).
+
+The main components are:
+- BiotCoupled2D: Problem definition with hard BC enforcement
+- BiotCoupledTrainer: Trainer with advanced physics-based validation methods
+"""
+
 import numpy as np
 import jax.numpy as jnp
 import jax
@@ -1126,7 +1138,7 @@ class BiotCoupledTrainer:
 
 # Create convenient functions
 def FixedTrainer():
-    """Create a trainer with CORRECT hard BC enforcement"""
+    """Create a trainer with hard BC enforcement"""
     return BiotCoupledTrainer()
 
 def CoupledTrainer():

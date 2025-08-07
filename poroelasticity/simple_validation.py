@@ -43,7 +43,7 @@ def test_basic_functionality():
         print("   FBPINNs core modules imported successfully")
         
         # Test physics trainer
-        from trainers.biot_trainer_2d import BiotCoupledTrainer
+        from trainers.base_model import BiotCoupledTrainer
         print("   Physics trainer imported successfully")
         
         # Test simple domain initialization parameters
@@ -80,7 +80,7 @@ def run_quick_physics_test():
     print("=" * 50)
     
     try:
-        from trainers.biot_trainer_2d import BiotCoupledTrainer
+        from trainers.base_model import BiotCoupledTrainer
         import numpy as np
         
         # Create a very simple test case

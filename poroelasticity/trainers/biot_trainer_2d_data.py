@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 # Import the base trainer classes
-from trainers.biot_trainer_2d import BiotCoupled2D, BiotCoupledTrainer
+from trainers.base_model import BiotCoupled2D, BiotCoupledTrainer
 
 class VTKDataLoader:
     """

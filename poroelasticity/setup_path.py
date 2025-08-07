@@ -8,7 +8,7 @@ from the poroelasticity directory.
 Usage:
     %cd poroelasticity
     !python setup_path.py
-    !python run_all_validations.py --quick
+    !python run_all_validations.py 
 """
 
 import sys
@@ -57,7 +57,7 @@ def test_imports():
         return False
     
     try:
-        from trainers.biot_trainer_2d import BiotCoupledTrainer
+        from trainers.base_model import BiotCoupledTrainer
         print("  SUCCESS: Physics trainer imported")
     except ImportError as e:
         print(f"  ERROR: Physics trainer import failed: {e}")
