@@ -55,7 +55,7 @@ def test_basic_functionality():
         )
         print("   Domain parameters created successfully")
         
-        # Test constants (the proper way FBPINNs expects)
+        # Test constants and network initialization
         print("\nTesting constants...")
         constants = Constants(
             domain=RectangularDomainND,
@@ -135,13 +135,6 @@ def main():
     if run_quick_physics_test():
         print("\n SUCCESS: All validation tests passed!")
         print("\nThe FBPINNs poroelasticity implementation is working correctly.")
-        print("\nNext steps:")
-        print("1. Open the visualization notebook:")
-        print("   notebooks/Biot_Visualization_Hub.ipynb")
-        print("2. Run individual test files:")
-        print("   python test/test_biot_2d.py")
-        print("3. For more comprehensive validation, fix and run:")
-        print("   python run_all_validations.py --quick")
     else:
         print("\nPhysics validation failed. Check the errors above.")
         sys.exit(1)
