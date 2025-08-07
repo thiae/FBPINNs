@@ -10,7 +10,7 @@ This module contains trainer implementations for Biot poroelasticity problems:
 from .base_model import BiotCoupled2D, BiotCoupledTrainer
 
 try:
-    from .biot_trainer_2d_data import BiotCoupledDataTrainer, VTKDataLoader, DataEnhancedTrainer
+    from .coupled_model import BiotCoupledDataTrainer, VTKDataLoader, DataEnhancedTrainer
     __all__ = ['BiotCoupled2D', 'BiotCoupledTrainer', 
                'BiotCoupledDataTrainer', 'VTKDataLoader', 'DataEnhancedTrainer']
 except ImportError:

@@ -64,7 +64,7 @@ def test_imports():
         return False
     
     try:
-        from trainers.biot_trainer_2d_data import BiotCoupledDataTrainer
+        from poroelasticity.trainers.coupled_model import BiotCoupledDataTrainer
         print("  SUCCESS: Data trainer imported")
     except ImportError as e:
         print(f"  WARNING: Data trainer import failed: {e} (optional)")
