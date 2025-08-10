@@ -15,70 +15,37 @@ from fbpinns.trainers import FBPINNTrainer
 
 class BiotCoupled2D(Problem):
     """
-    Unified 2D Biot poroelasticity problem with transient flow and geomechanics.
+    Unified 2D Biot Poroelasticity Homogeneous Problem with Hard BC Implementation
 
-    This class implements a homogeneous base model for coupled geomechanics and
-    fluid flow in two spatial dimensions and time.  The network takes three
-    inputs (x, y, t) and returns three outputs (u_x, u_y, p).  Hard Dirichlet
-    boundary conditions are imposed for pressure on the left (injection) and
-    right (far-field) boundaries and for displacement on the left and bottom
-    boundaries.  Initial conditions are satisfied via a smooth ramp in time.
-
-    The loss function enforces the quasi‑static momentum balance and the
-    transient mass balance with a homogeneous permeability.  Storage effects
-    enter via the Biot modulus M.
+    : Uses constraining_fn  for hard BC enforcement
     """
 
     @staticmethod
-    def init_params(E=5000.0, nu=0.25, alpha=0.8, k=1.0, mu=1.0, M=100.0):
-        """Initialize material parameters for both mechanics and flow.
+    def init_params(E=5000.0, nu=0.25, alpha=0.8, k=1.0, mu=1.0):
+        """Initialize material parameters for both mechanics and flow"""
 
-        Parameters
-        ----------
-        E : float
-            Young's modulus (Pa).
-        nu : float
-            Poisson's ratio (dimensionless).
-        alpha : float
-            Biot coefficient (dimensionless).
-        k : float
-            Intrinsic permeability (mD or nondimensionalised).
-        mu : float
-            Fluid viscosity (Pa·s or nondimensionalised).
-        M : float
-            Biot modulus governing storage (Pa).  The specific storage is 1/M.
-
-        Returns
-        -------
-        tuple
-            A tuple of (static_params, trainable_params).  For this problem
-            there are no trainable material parameters."""
-
-        # Convert all parameters to JAX arrays for consistency and automatic
-        # differentiation.  Using float32 avoids unnecessary promotions.
         E = jnp.array(E, dtype=jnp.float32)
         nu = jnp.array(nu, dtype=jnp.float32)
         alpha = jnp.array(alpha, dtype=jnp.float32)
         k = jnp.array(k, dtype=jnp.float32)
         mu = jnp.array(mu, dtype=jnp.float32)
-        M = jnp.array(M, dtype=jnp.float32)
 
-        # Elastic constants derived from E and nu
+        # Calculate the derived parameters
         G = E / (2.0 * (1.0 + nu))
         lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
 
         static_params = {
-            # dims = (number of outputs, number of inputs)
-            # outputs: (u_x, u_y, p); inputs: (x, y, t)
-            "dims": (3, 3),  
+            "dims": (3, 2),  # 3 outputs (u_x, u_y, p), 2 inputs (x, y)
+            # Mechanics parameters
             "E": E,
             "nu": nu,
             "G": G,
             "lam": lam,
+            # Flow parameters
             "k": k,
             "mu": mu,
-            "alpha": alpha,
-            "M": M
+            # Coupling parameter
+            "alpha": alpha
         }
         trainable_params = {}
         return static_params, trainable_params
@@ -86,95 +53,46 @@ class BiotCoupled2D(Problem):
     @staticmethod
     def constraining_fn(all_params, x_batch, u):
         """
-        Apply hard constraints to satisfy boundary and initial conditions.
 
-        The raw network output u(x, y, t) = [u_x, u_y, p] is transformed into
-        physically meaningful fields that exactly satisfy Dirichlet boundary
-        conditions and initial conditions.  A time dependent envelope ensures
-        that the solution vanishes at t=0.
+        This method is called by FBPINNs after network evaluation.
+        Transform network output to satisfy boundary conditions exactly.
 
-        Hard constraints enforced:
+        Args:
+            all_params: Parameter dictionary
+            x_batch: Input coordinates [N, 2]
+            u: Raw network output [N, 3] for [ux, uy, p]
 
-        - u_x(0, y, t) = 0 (fixed left boundary)
-        - u_y(x, 0, t) = 0 (fixed bottom boundary)
-        - u(x, y, 0) = 0 (initially undeformed)
-        - p(0, y, t) = p_L(y, t) (injection boundary, time ramped)
-        - p(1, y, t) = 0 (far field boundary)
-        - p(x, y, 0) = p0(y) (initial pressure)
-
-        Parameters
-        ----------
-        all_params : dict
-            Dictionary containing all model parameters.
-        x_batch : array_like, shape (N, 3)
-            Coordinates (x, y, t) at which the network is evaluated.
-        u : array_like, shape (N, 3)
-            Raw network output before applying boundary conditions.
-
-        Returns
-        -------
-        array_like, shape (N, 3)
-            Constrained network output satisfying boundary and initial
-            conditions.
+        Returns:
+            Transformed output with hard BCs enforced [N, 3]
         """
+        x = x_batch[:, 0:1]  # x coordinates
+        y = x_batch[:, 1:2]  # y coordinates
 
-        x = x_batch[:, 0:1]  
-        y = x_batch[:, 1:2]  
-        t = x_batch[:, 2:3]  
-
+        # Raw outputs from network
         ux_raw = u[:, 0:1]
         uy_raw = u[:, 1:2]
         p_raw = u[:, 2:3]
 
-        # Smooth ramp function: S(0) = 0 and S(t) → 1 as t → 1.  This prevents
-        # discontinuities at t=0 and enforces the initial condition u=0.
-        def S(t):
-          return 1.0 - jnp.exp(-5.0*jnp.clip(t, 0.0, 1.0))
+        # HARD BC ENFORCEMENT - Mathematical transformations
 
-        # Initial pressure profile p0(y).  For excess pressure formulation,
-        # choose p0 = 0.  For hydrostatic baseline, set p0 = c0 * (1 - y).
-        p0 = jnp.zeros_like(t)
+        # Pressure: p(0,y)=1, p(1,y)=0
+        # Linear interpolation from 1 to 0, plus interior variation
+        p = (1.0 - x) + p_raw * x * (1.0 - x) * 4.0
 
-        # Left boundary pressure p_L(y, t).  A Gaussian centred at injection_center
-        # with width sigma, modulated by the ramp S(t).
+        # X-displacement: ux(0,y)=0
+        # Multiply by x to force zero at x=0
+        ux = ux_raw * x
 
-        injection_center, sigma = 0.4, 0.08
-        gauss_y = jnp.exp(-((y - injection_center)**2) / (2.0 * sigma**2))
-        pL = p0 + S(t) * gauss_y
-        # Right boundary pressure p_R(y, t) = 0 (far‑field)
-        pR = p0 * 0.0  
+        # Y-displacement: uy(x,0)=0 and uy(0,y)=0
+        # Multiply by x*y to force zero at both x=0 and y=0
+        uy = uy_raw * x * y
 
-        # Hard Dirichlet conditions for displacement.  Multiplying by x and y
-        # enforces u_x(0, ·, ·) = 0 and u_y(·, 0, ·) = 0, and multiplying by
-        # S(t) ensures u = 0 at t=0.
-        ux = S(t) * x * ux_raw           
-        uy = S(t) * x * y * uy_raw       
-
-        # Pressure ansatz combining initial condition, boundary conditions,
-        # and learnable interior variation.  The factor x(1-x) ensures that
-        # the interior term vanishes on x=0 and x=1 so it cannot violate
-        # Dirichlet conditions.  Multiplication by S(t) enforces p = p0 at t=0.
-        p = (
-            p0 
-            + (1.0 - x) * (pL - p0) 
-            + x * (pR - p0) 
-            + x * (1.0 - x) * S(t) * p_raw
-        )
-
+        # Return transformed output with enforced BCs
         return jnp.concatenate([ux, uy, p], axis=-1)
 
     @staticmethod
     def sample_constraints(all_params, domain, key, sampler, batch_shapes):
-        """
-        Sample interior and boundary points for the residual and specify
-        required derivatives.
-
-        This method is used by FBPINNs to generate collocation points and
-        determine which derivatives of the network output are needed for the
-        physics loss.  Interior points are sampled in (x, y, t).  Boundary
-        points are still sampled but the boundary conditions are enforced
-        exactly, so their derivatives are not used in the loss.
-        """
+        """Sample constraints for both mechanics and flow equations"""
 
         dom = all_params["static"].setdefault("domain", {})
         d = all_params["static"]["problem"]["dims"][1]
@@ -188,170 +106,134 @@ class BiotCoupled2D(Problem):
         else:
             batch_shape_phys = bs0
 
-        # Sample interior collocation points in (x, y, t)
+        # Sample interior points for physics
         x_batch_phys = domain.sample_interior(all_params, key, sampler, batch_shape_phys)
 
-        # Derivatives needed for mechanics and flow equations.
-        # Ordering here must match the unpacking in loss_fn.
+        # Required derivatives for physics equations
         required_ujs_phys = (
-            (0, (0,)),   # ∂ux/∂x
-            (0, (0,0)),  # ∂²ux/∂x²
-            (0, (1,1)),  # ∂²ux/∂y²
-            (0, (0,1)),  # ∂²ux/(∂x∂y)
-            (1, (1,)),   # ∂uy/∂y
-            (1, (0,0)),  # ∂²uy/∂x²
-            (1, (1,1)),  # ∂²uy/∂y²
-            (1, (0,1)),  # ∂²uy/(∂x∂y)
-            (2, (0,)),   # ∂p/∂x
-            (2, (1,)),   # ∂p/∂y
-            (2, (0,0)),  # ∂²p/∂x²
-            (2, (1,1)),  # ∂²p/∂y²
-            (2, (2,)),   # ∂p/∂t
-            (0, (0,2)),  # ∂/∂t(∂ux/∂x)
-            (1, (1,2)),  # ∂/∂t(∂uy/∂y)
+            # u_x derivatives
+            (0, (0,)),
+            (0, (0,0)),
+            (0, (1,1)),
+            (0, (0,1)),
+            # u_y derivatives
+            (1, (1,)),
+            (1, (0,0)),
+            (1, (1,1)),
+            (1, (0,1)),
+            # p derivatives
+            (2, (0,)),
+            (2, (1,)),
+            (2, (0,0)),
+            (2, (1,1))
         )
 
-        # Sample boundary points.  Hard BCs mean we do not need derivatives
-        # there, but sampling can be useful for diagnostics.
+        # Boundary sampling (minimal since BCs are hard enforced)
         boundary_batch_shapes = batch_shapes[1:5]
-        try:
-            x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
-        except Exception:
-            zeros = jnp.zeros((0, d), dtype=jnp.float32)
-            x_batches_boundaries = [zeros, zeros, zeros, zeros]
+        x_batches_boundaries = domain.sample_boundaries(all_params, key, sampler, boundary_batch_shapes)
 
+        x_batch_left = x_batches_boundaries[0]
+        x_batch_right = x_batches_boundaries[1]
+        x_batch_bottom = x_batches_boundaries[2]
+        x_batch_top = x_batches_boundaries[3]
+
+        # Minimal boundary constraints (just evaluate the fields)
         required_ujs_boundary = ((0, ()), (1, ()), (2, ()))
 
         return [
+            # Physics constraints
             [x_batch_phys, required_ujs_phys],
-            [x_batches_boundaries[0], required_ujs_boundary],
-            [x_batches_boundaries[1], required_ujs_boundary],
-            [x_batches_boundaries[2], required_ujs_boundary],
-            [x_batches_boundaries[3], required_ujs_boundary],
+            # Boundary constraints (minimal since hard enforced)
+            [x_batch_left, required_ujs_boundary],
+            [x_batch_right, required_ujs_boundary],
+            [x_batch_bottom, required_ujs_boundary],
+            [x_batch_top, required_ujs_boundary]
         ]
 
     @staticmethod
     def loss_fn(all_params, constraints):
-    
         """
-        Compute the mean squared residuals of the Biot equations.
-
-        Mechanics residual:   ∇·σ = 0,  σ = 2G ε + λ tr(ε) I − α p I
-        Flow residual:        (1/M) p_t + α ∂t(div u) − ∇·((k/μ) ∇p) = 0
-
-        Homogeneous permeability (∇k = 0) is assumed in this base model.
+        Loss function focusing on physics (BCs are hard enforced)
         """
+        # Get material parameters
+        G = all_params["static"]["problem"]["G"]
+        lam = all_params["static"]["problem"]["lam"]
+        alpha = all_params["static"]["problem"]["alpha"]
+        k = all_params["static"]["problem"]["k"]
+        E = all_params["static"]["problem"]["E"]  
 
-        prob = all_params["static"]["problem"]
-        E, G, lam = prob["E"], prob["G"], prob["lam"]
-        alpha, k, mu, M = prob["alpha"], prob["k"], prob["mu"], prob["M"]
+        # Physics constraints
+        x_batch_phys = constraints[0][0]
+        # Unpack derivatives (these are computed after constraining_fn is applied)
+        duxdx, d2uxdx2, d2uxdy2, d2uxdxdy, duydy, d2uydx2, d2uydy2, d2uydxdy, dpdx, dpdy, d2pdx2, d2pdy2 = constraints[0][1:13]
 
-        # Unpack derivatives according to the ordering in required_ujs_phys.
-        (
-        duxdx, d2uxdx2, d2uxdy2, d2uxdxdy,
-        duydy, d2uydx2, d2uydy2, d2uydxdy,
-        dpdx, dpdy, d2pdx2, d2pdy2,
-        p_t, duxdx_t, duydy_t
-        ) = constraints[0][1:16]
+        # Compute divergence of displacement
+        div_u = duxdx + duydy
 
-        # Divergence and its time derivative
-        div_u   = duxdx + duydy
-        div_u_t = duxdx_t + duydy_t
-        lap_p   = d2pdx2 + d2pdy2
+        # Mechanics equations
+        equilibrium_x = ((2*G + lam)*d2uxdx2 + lam*d2uydxdy +
+                        G*d2uxdy2 + G*d2uydxdy + alpha*dpdx)
 
-        # Momentum equilibrium residuals: ∇·σ=0 with σ = 2G ε + λ tr(ε) I − αp I  (keep the minus!)
-        equilibrium_x = (
-            (2 * G + lam) * d2uxdx2 
-            + lam * d2uydxdy 
-            + G * d2uxdy2 
-            + G * d2uydxdy 
-            - alpha * dpdx
-            )
-        equilibrium_y = (
-            G * d2uxdxdy 
-            + G * d2uydx2 
-            + lam * d2uxdxdy 
-            + (2 * G + lam) * d2uydy2 
-            - alpha * dpdy)
+        equilibrium_y = (G*d2uxdxdy + G*d2uydx2 +
+                        lam*d2uxdxdy + (2*G + lam)*d2uydy2 + alpha*dpdy)
 
-       # Mass balance residual: (1/M) p_t + α ∂t(div u) − ∇·((k/μ)∇p) = 0  (homog. k => ∇k=0)
-        darcy_div = (k / mu) * lap_p
-        flow_residual = (p_t / M) + alpha * div_u_t - darcy_div
+        #mechanics_loss = jnp.mean(equilibrium_x**2) + jnp.mean(equilibrium_y**2)
 
-        # Characteristic scales to balance contributions
-        L = 1.0
-        p_scale = 1.0
-        mech_scale = jnp.maximum(E / (L ** 2), 1e-6)
-        flow_scale = jnp.maximum((k / mu) * (p_scale / (L ** 2)), 1e-8)
+        # Flow equation
+        laplacian_p = d2pdx2 + d2pdy2
+        flow_residual = -k * laplacian_p + alpha * div_u
+        #flow_loss = jnp.mean(flow_residual**2)
 
-        mechanics_loss = jnp.mean((equilibrium_x / mech_scale) ** 2 + (equilibrium_y / mech_scale) ** 2)
-        flow_loss = jnp.mean((flow_residual / flow_scale) ** 2)
-        return mechanics_loss + flow_loss
+        # No BC penalties needed - they're hard enforced
 
+        # AUTOMATIC SCALING by characteristic values
+        # Mechanics: characteristic stress = E/L where L=1
+        mechanics_char = E  # This is 5000
+        
+        # Flow: characteristic is k*p/L² where p~1, L~1
+        flow_char = k  # This is 1
+
+        # Normalized losses (now both O(1))
+        mechanics_loss = jnp.mean((equilibrium_x/mechanics_char)**2 + 
+                                  (equilibrium_y/mechanics_char)**2)
+        flow_loss = jnp.mean((flow_residual/flow_char)**2)
+        
+        # Both terms contribute equally
+        total_loss = mechanics_loss + flow_loss
+
+        return total_loss
 
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape=None):
-        """
-        There is no closed form solution for this problem; return None.
-        """
+        """No exact solution - returns None for physics only training"""
         return None
 
 
 class BiotCoupledTrainer:
     """
-    Training wrapper for the BiotCoupled2D problem with hard boundary conditions.
-
-    This class configures the domain, decomposition, neural network, sampling,
-    and training hyperparameters.  It exposes convenience methods for training,
-    prediction, boundary verification, and plotting.
+    Trainer with hard BC enforcement via constraining_fn
     """
 
     def __init__(self):
-        # Define configuration for FBPINN.  We select a rectangular domain in
-        # (x, y, t) ∈ [0,1]×[0,1]×[0,1] with overlapping subdomains for FBPINN.
+        """Initialize with optimal settings"""
 
         self.config = Constants(
             run="biot_coupled_2d",
             domain=RectangularDomainND,
-            domain_init_kwargs={
-                'xmin': jnp.array([0.0, 0.0, 0.0]), 
-                'xmax': jnp.array([1.0, 1.0, 1.0])
-                },
+            domain_init_kwargs={'xmin': jnp.array([0., 0.]), 'xmax': jnp.array([1., 1.])},
             problem=BiotCoupled2D,
-            problem_init_kwargs={
-                'E': 5000.0, 
-                'nu': 0.25, 
-                'alpha': 0.8, 
-                'k': 1.0, 
-                'mu': 1.0, 
-                'M': 100.0
-                },
+            problem_init_kwargs={'E': 5000.0, 'nu': 0.25, 'alpha': 0.8, 'k': 1.0, 'mu': 1.0},
             decomposition=RectangularDecompositionND,
             decomposition_init_kwargs={
-                # Subdomain centers along x, y, and t.  More subdomains in x,y than t
-                'subdomain_xs': [
-                    jnp.linspace(0, 1, 3), 
-                    jnp.linspace(0, 1, 3), 
-                    jnp.linspace(0, 1, 2)
-                    ],
-                # Subdomain widths.  Overlap is controlled by these values.
-                'subdomain_ws': [
-                    0.8 * jnp.ones(3),
-                    0.8 * jnp.ones(3), 
-                    1.0 * jnp.ones(2)
-                    ],
+                'subdomain_xs': [jnp.linspace(0, 1, 3), jnp.linspace(0, 1, 3)],
+                'subdomain_ws': [0.8 * jnp.ones(3), 0.8 * jnp.ones(3)],
                 'unnorm': (0., 1.)
             },
             network=FCN,
-            network_init_kwargs={
-                # Architecture: 3 inputs (x,y,t), hidden layers, 3 outputs (u_x,u_y,p)
-                'layer_sizes': [3, 64, 64, 64, 3], 
-                'activation': 'tanh'
-                },
-            # Sampling shapes: interior in (x,y,t), no boundary sampling for BCs
-            ns=((80, 80, 16), (0,), (0,), (0,), (0,)), 
-            n_test=(20, 20, 5),
-            n_steps=5000,  
+            network_init_kwargs={'layer_sizes': [2, 64, 64, 64, 3], 'activation': 'tanh'},
+            ns=((100, 100), (50,), (50,), (50,), (50,)),
+            n_test=(20, 20),
+            n_steps=5000,  # Increased for better convergence
             optimiser_kwargs={'learning_rate': 1e-3},
             summary_freq=100,
             test_freq=250,
@@ -363,73 +245,76 @@ class BiotCoupledTrainer:
         self.all_params = None
 
     def train(self, n_steps=None):
-        """
-        Train the PINN.  If n_steps is provided, override the configuration.
-        """
+        """Train with hard BC enforcement via constraining_fn"""
         if n_steps is not None:
             self.config.n_steps = n_steps
             self.trainer.c.n_steps = n_steps
-        print("Training with hard boundary constraints.")
+
+        print("Training with Hard BC ")
+        print("Using constraining_fn method")
+        print("Boundary conditions are mathematically guaranteed")
+
         self.all_params = self.trainer.train()
         return self.all_params
 
-    def predict(self, x_points, t=1.0):
-        """
-        Evaluate the trained network at specified points.  If x_points has
-        shape (N,2), append a column of constant time t.
-        """
+    def predict(self, x_points):
+        """Predict using FBPINN_solution (which applies constraining_fn)"""
         if self.all_params is None:
             raise ValueError("Model not trained yet")
-        x_points = jnp.array(x_points)
-        if x_points.shape[1] == 2: 
-            tcol = jnp.full((x_points.shape[0], 1), float(t))
-            x_points = jnp.concatenate([x_points, tcol], axis=1)
+
+        if not isinstance(x_points, jnp.ndarray):
+            x_points = jnp.array(x_points)
+
         from fbpinns.analysis import FBPINN_solution
+
+        # All subdomains active for prediction
         active = jnp.ones(self.all_params["static"]["decomposition"]["m"], dtype=jnp.int32)
-        return FBPINN_solution(self.config, self.all_params, active, x_points)
 
-    def verify_bcs(self, n_points=100, t=1.0):
+        # Applies constraining_fn internally
+        predictions = FBPINN_solution(self.config, self.all_params, active, x_points)
 
-        """
-        Evaluate the maximum violation of hard boundary conditions at time t.
-        """
+        return predictions
+
+    def verify_bcs(self, n_points=100):
+        """Verify that boundary conditions are satisfied"""
   
-        print("\n" + "="*60)
-        print(f"Boundary Conditon Verification at t={t}")
+        print("Boundary Condition Verification")
         print("="*60)
 
+        # Check left boundary (x=0)
         y_test = jnp.linspace(0, 1, n_points)
-        tcol = jnp.full((n_points, 1), float(t))
-
-        left_points = jnp.column_stack([jnp.zeros(n_points), y_test, tcol.squeeze()])
-        right_points = jnp.column_stack([jnp.ones(n_points), y_test, tcol.squeeze()])
-        bottom_points = jnp.column_stack([jnp.linspace(0, 1, n_points), jnp.zeros(n_points), tcol.squeeze()])
-
+        left_points = jnp.column_stack([jnp.zeros(n_points), y_test])
         left_pred = self.predict(left_points)
+
+        # Check right boundary (x=1)
+        right_points = jnp.column_stack([jnp.ones(n_points), y_test])
         right_pred = self.predict(right_points)
+
+        # Check bottom boundary (y=0)
+        x_test = jnp.linspace(0, 1, n_points)
+        bottom_points = jnp.column_stack([x_test, jnp.zeros(n_points)])
         bottom_pred = self.predict(bottom_points)
 
-        # Reconstruct the target left boundary pressure used in constraining_fn
-        injection_center, sigma = 0.4, 0.08
-        S = 1.0 - jnp.exp(-5.0*float(t))
-        pL = S * jnp.exp(-((y_test - injection_center) ** 2) / (2 * sigma ** 2))
+        print(f"Left boundary (x=0):")
+        print(f"  ux = 0: max violation = {jnp.max(jnp.abs(left_pred[:, 0])):.6e}")
+        print(f"  uy = 0: max violation = {jnp.max(jnp.abs(left_pred[:, 1])):.6e}")
+        print(f"  p = 1:  max violation = {jnp.max(jnp.abs(left_pred[:, 2] - 1.0)):.6e}")
 
-        print(f"Left boundary (x=0): ux=0, uy=0, p=pL(y,t)")
-        print(f"  max|ux| = {jnp.max(jnp.abs(left_pred[:, 0])):.2e}")
-        print(f"  max|uy| = {jnp.max(jnp.abs(left_pred[:, 1])):.2e}")
-        print(f"  max|p - pL| = {jnp.max(jnp.abs(left_pred[:, 2] - pL)):.2e}")
-        print(f"Right boundary (x=1): p=0")
-        print(f"  max|p| = {jnp.max(jnp.abs(right_pred[:, 2])):.2e}")
-        print(f"Bottom boundary (y=0): uy=0")
-        print(f"  max|uy| = {jnp.max(jnp.abs(bottom_pred[:, 1])):.2e}")
+        print(f"\nRight boundary (x=1):")
+        print(f"  p = 0:  max violation = {jnp.max(jnp.abs(right_pred[:, 2])):.6e}")
 
+        print(f"\nBottom boundary (y=0):")
+        print(f"  uy = 0: max violation = {jnp.max(jnp.abs(bottom_pred[:, 1])):.6e}")
+
+        # Check if all violations are small
         all_violations = [
             jnp.max(jnp.abs(left_pred[:, 0])),
             jnp.max(jnp.abs(left_pred[:, 1])),
-            jnp.max(jnp.abs(left_pred[:, 2] - pL)),
+            jnp.max(jnp.abs(left_pred[:, 2] - 1.0)),
             jnp.max(jnp.abs(right_pred[:, 2])),
-            jnp.max(jnp.abs(bottom_pred[:, 1])),
+            jnp.max(jnp.abs(bottom_pred[:, 1]))
         ]
+
         max_violation = max(all_violations)
         if max_violation < 1e-6:
             print("\nStatus: PERFECT - All BCs satisfied to machine precision")
@@ -439,6 +324,7 @@ class BiotCoupledTrainer:
             print("\nStatus: GOOD - Minor BC violations")
         else:
             print(f"\nStatus: CHECK - Max violation: {max_violation:.3e}")
+
         return max_violation < 1e-2
 
     def compute_physics_metrics(self, n_points=50, method='autodiff'):
@@ -771,36 +657,57 @@ class BiotCoupledTrainer:
 
         return {'max_violation': float(max(violations)), 'all_violations': violations}
 
-    def plot_solution(self, n_points=50, t=1.0, depth_style=True):
-        x = jnp.linspace(0, 1, n_points); y = jnp.linspace(0, 1, n_points)
+    def plot_solution(self, n_points=50):
+        """Plot all solution fields"""
+        x = jnp.linspace(0, 1, n_points)
+        y = jnp.linspace(0, 1, n_points)
         X, Y = jnp.meshgrid(x, y)
-        XYT = jnp.column_stack([X.flatten(), Y.flatten(), jnp.full((n_points*n_points,), float(t))])
+        points = jnp.column_stack([X.flatten(), Y.flatten()])
 
-        pred = self.predict(XYT)
-        UX = pred[:,0].reshape(n_points, n_points)
-        UY = pred[:,1].reshape(n_points, n_points)
-        P  = pred[:,2].reshape(n_points, n_points)
+        pred = self.predict(points)
+
+        UX = pred[:, 0].reshape(n_points, n_points)
+        UY = pred[:, 1].reshape(n_points, n_points)
+        P = pred[:, 2].reshape(n_points, n_points)
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-        c1 = axes[0].contourf(X, Y, UX*1000.0, levels=20, cmap='RdBu')
-        axes[0].set_title('Horizontal disp $u_x$ [mm]'); axes[0].set_xlabel('x'); axes[0].set_ylabel('y'); plt.colorbar(c1, ax=axes[0])
+        # X-displacement
+        c1 = axes[0].contourf(X, Y, UX, levels=20, cmap='RdBu')
+        axes[0].set_title('X-Displacement (ux)')
+        axes[0].set_xlabel('x')
+        axes[0].set_ylabel('y')
+        plt.colorbar(c1, ax=axes[0])
 
-        c2 = axes[1].contourf(X, Y, UY*1000.0, levels=20, cmap='RdBu')
-        axes[1].set_title('Uplift $u_y$ [mm] (positive up)'); axes[1].set_xlabel('x'); axes[1].set_ylabel('y'); plt.colorbar(c2, ax=axes[1])
+        # Y-displacement
+        c2 = axes[1].contourf(X, Y, UY, levels=20, cmap='RdBu')
+        axes[1].set_title('Y-Displacement (uy)')
+        axes[1].set_xlabel('x')
+        axes[1].set_ylabel('y')
+        plt.colorbar(c2, ax=axes[1])
 
+        # Pressure
         c3 = axes[2].contourf(X, Y, P, levels=20, cmap='plasma')
-        axes[2].set_title('Pressure p [nondim or MPa]'); axes[2].set_xlabel('x'); axes[2].set_ylabel('y'); plt.colorbar(c3, ax=axes[2])
+        axes[2].set_title('Pressure (p)')
+        axes[2].set_xlabel('x')
+        axes[2].set_ylabel('y')
+        plt.colorbar(c3, ax=axes[2])
 
-        if depth_style:
-            for ax in axes: ax.invert_yaxis()
-            axes[0].set_ylabel('Depth y (down)')
-            axes[1].set_ylabel('Depth y (down)')
-            axes[2].set_ylabel('Depth y (down)')
+        plt.tight_layout()
+        plt.show()
 
-        plt.suptitle(f'Solution at t={t:.2f}', fontsize=12, fontweight='bold'); plt.tight_layout(); plt.show()
+        # Print field statistics
+        print("\nField Statistics:")
+        print(f"ux: min={jnp.min(UX):.4f}, max={jnp.max(UX):.4f}")
+        print(f"uy: min={jnp.min(UY):.4f}, max={jnp.max(UY):.4f}")
+        print(f"p:  min={jnp.min(P):.4f}, max={jnp.max(P):.4f}")
+
+        # Verify physical behavior
+        print("\nPhysical Behavior Check:")
+        print(f"Pressure gradient (left to right): {P[n_points//2, 0]:.3f} -> {P[n_points//2, -1]:.3f}")
+        print(f"Max displacement at x=1: ux={jnp.max(jnp.abs(UX[:, -1])):.4f}")
+
         return fig, axes
-
 
     def track_convergence_history(self, checkpoint_steps=[100, 500, 1000, 1500, 2000],
                                 save_checkpoints=True, checkpoint_dir="checkpoints"):
@@ -936,142 +843,286 @@ class BiotCoupledTrainer:
 
         return fig, axes
 
-    def visualize_domain_decomposition(self, save_path=None):
+    def compute_physics_metrics_enhanced(self, n_points=50):
         """
-        Visualize the FBPINN domain decomposition with subdomain boundaries and overlaps.
-        Can be called before or after training.
+        Compute physics metrics using finite differences.
+
+        Enhanced physics validation with relative errors and detailed analysis.
 
         Args:
-          save_path: Optional path to save the figure 
+            n_points: Number of points along each dimension for evaluation grid
 
         Returns:
-          fig, axes: Matplotlib figure and axes objects
+            Dictionary containing all computed metrics including relative errors
         """
-        print("\n" + "="*60)
-        print("FBPINN DOMAIN DECOMPOSITION")
-        print("="*60)
+        import warnings
+        warnings.warn(
+            "compute_physics_metrics_enhanced is deprecated and will be removed in a future version. "
+            "Use compute_physics_metrics(method='finite_diff') instead.",
+            DeprecationWarning, stacklevel=2
+        )
 
-        # Get subdomain parameters from config (available before training)
-        subdomain_xs = self.config.decomposition_init_kwargs['subdomain_xs']
-        subdomain_ws = self.config.decomposition_init_kwargs['subdomain_ws']
+        return self.compute_physics_metrics(n_points=n_points, method='finite_diff')
 
-        # Calculate total number of subdomains
-        m = len(subdomain_xs[0]) * len(subdomain_xs[1])
+    def plot_residual_spatial_distribution(self):
+        """
+        Visualize spatial distribution of PDE residuals.
+        Shows WHERE the errors are largest in the domain.
+        """
+        if not hasattr(self, 'last_residuals'):
+            print("Computing residuals first...")
+            self.compute_physics_metrics(method='finite_diff')
 
-        # Create figure
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        residuals = self.last_residuals
 
-        # Left plot: Subdomain boundaries
-        ax1 = axes[0]
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
-        # Get x and y divisions
-        x_divs = subdomain_xs[0]
-        y_divs = subdomain_xs[1]
-        wx = subdomain_ws[0][0]  # Assuming uniform weights
-        wy = subdomain_ws[1][0]
+        # Mechanics X residual
+        im1 = axes[0, 0].contourf(residuals['x'], residuals['y'],
+                                jnp.abs(residuals['mechanics_x']),
+                                levels=20, cmap='hot')
+        axes[0, 0].set_title('|Mechanics X Residual|')
+        axes[0, 0].set_xlabel('x')
+        axes[0, 0].set_ylabel('y')
+        plt.colorbar(im1, ax=axes[0, 0])
 
-        # Plot the main domain
-        ax1.add_patch(plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor='black', linewidth=2))
+        # Mechanics Y residual
+        im2 = axes[0, 1].contourf(residuals['x'], residuals['y'],
+                                jnp.abs(residuals['mechanics_y']),
+                                levels=20, cmap='hot')
+        axes[0, 1].set_title('|Mechanics Y Residual|')
+        axes[0, 1].set_xlabel('x')
+        axes[0, 1].set_ylabel('y')
+        plt.colorbar(im2, ax=axes[0, 1])
 
-        # Plot subdomain centers and boundaries
-        colors = plt.cm.Set3(np.linspace(0, 1, m))
-        subdomain_idx = 0
+        # Flow residual
+        im3 = axes[0, 2].contourf(residuals['x'], residuals['y'],
+                                jnp.abs(residuals['flow']),
+                                levels=20, cmap='hot')
+        axes[0, 2].set_title('|Flow Residual|')
+        axes[0, 2].set_xlabel('x')
+        axes[0, 2].set_ylabel('y')
+        plt.colorbar(im3, ax=axes[0, 2])
 
-        for i, x_center in enumerate(x_divs):
-            for j, y_center in enumerate(y_divs):
-                # Calculate subdomain boundaries with overlap
-                x_min = max(0, float(x_center - wx/2))
-                x_max = min(1, float(x_center + wx/2))
-                y_min = max(0, float(y_center - wy/2))
-                y_max = min(1, float(y_center + wy/2))
+        # Combined mechanics residual
+        mechanics_combined = jnp.sqrt(residuals['mechanics_x']**2 + residuals['mechanics_y']**2)
+        im4 = axes[1, 0].contourf(residuals['x'], residuals['y'],
+                                mechanics_combined,
+                                levels=20, cmap='hot')
+        axes[1, 0].set_title('Combined Mechanics Residual')
+        axes[1, 0].set_xlabel('x')
+        axes[1, 0].set_ylabel('y')
+        plt.colorbar(im4, ax=axes[1, 0])
 
-                # Plot subdomain
-                rect = plt.Rectangle((x_min, y_min), x_max-x_min, y_max-y_min,
-                                    fill=True, facecolor=colors[subdomain_idx],
-                                    alpha=0.3, edgecolor=colors[subdomain_idx],
-                                    linewidth=1.5)
-                ax1.add_patch(rect)
+        # Divergence of displacement
+        im5 = axes[1, 1].contourf(residuals['x'], residuals['y'],
+                                jnp.abs(residuals['div_u']),
+                                levels=20, cmap='viridis')
+        axes[1, 1].set_title('|∇·u| (Volumetric Strain)')
+        axes[1, 1].set_xlabel('x')
+        axes[1, 1].set_ylabel('y')
+        plt.colorbar(im5, ax=axes[1, 1])
 
-                # Add subdomain number
-                ax1.text(float(x_center), float(y_center), f'{subdomain_idx+1}',
-                        ha='center', va='center', fontsize=12, fontweight='bold')
+        # Total residual
+        total_residual = jnp.sqrt(mechanics_combined**2 + residuals['flow']**2)
+        im6 = axes[1, 2].contourf(residuals['x'], residuals['y'],
+                                total_residual,
+                                levels=20, cmap='hot')
+        axes[1, 2].set_title('Total PDE Residual')
+        axes[1, 2].set_xlabel('x')
+        axes[1, 2].set_ylabel('y')
+        plt.colorbar(im6, ax=axes[1, 2])
 
-                # Mark center point
-                ax1.plot(float(x_center), float(y_center), 'ko', markersize=6)
+        # Add statistics to each plot
+        for i, (ax, data) in enumerate([
+            (axes[0, 0], jnp.abs(residuals['mechanics_x'])),
+            (axes[0, 1], jnp.abs(residuals['mechanics_y'])),
+            (axes[0, 2], jnp.abs(residuals['flow'])),
+            (axes[1, 0], mechanics_combined),
+            (axes[1, 1], jnp.abs(residuals['div_u'])),
+            (axes[1, 2], total_residual)
+        ]):
+            max_val = jnp.max(data)
+            mean_val = jnp.mean(data)
+            ax.text(0.02, 0.98, f'Max: {max_val:.2e}\nMean: {mean_val:.2e}',
+                    transform=ax.transAxes, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-                subdomain_idx += 1
-
-        ax1.set_xlim(-0.05, 1.05)
-        ax1.set_ylim(-0.05, 1.05)
-        ax1.set_xlabel('x')
-        ax1.set_ylabel('y')
-        ax1.set_title(f'FBPINN Decomposition ({m} subdomains)')
-        ax1.set_aspect('equal')
-        ax1.grid(True, alpha=0.3)
-
-        # Right plot: Overlap visualization
-        ax2 = axes[1]
-
-        # Create overlap intensity map
-        overlap_map = np.zeros((100, 100))
-        x_grid = np.linspace(0, 1, 100)
-        y_grid = np.linspace(0, 1, 100)
-
-        for i, x_center in enumerate(x_divs):
-            for j, y_center in enumerate(y_divs):
-                x_min = max(0, float(x_center - wx/2))
-                x_max = min(1, float(x_center + wx/2))
-                y_min = max(0, float(y_center - wy/2))
-                y_max = min(1, float(y_center + wy/2))
-
-                # Find grid points in this subdomain
-                x_mask = (x_grid >= x_min) & (x_grid <= x_max)
-                y_mask = (y_grid >= y_min) & (y_grid <= y_max)
-
-                for xi in np.where(x_mask)[0]:
-                    for yi in np.where(y_mask)[0]:
-                        overlap_map[yi, xi] += 1
-
-        im = ax2.imshow(overlap_map, extent=[0, 1, 0, 1], origin='lower',
-                        cmap='YlOrRd', aspect='equal')
-        ax2.set_xlabel('x')
-        ax2.set_ylabel('y')
-        ax2.set_title('Subdomain Overlap (Number of overlapping subdomains)')
-        plt.colorbar(im, ax=ax2, label='Number of subdomains')
-
-        # Add grid lines at subdomain boundaries
-        for x in x_divs:
-            ax2.axvline(float(x), color='black', linestyle='--', alpha=0.3)
-        for y in y_divs:
-            ax2.axhline(float(y), color='black', linestyle='--', alpha=0.3)
-
-        # Print decomposition info
-        print(f"Total subdomains: {m}")
-        print(f"X-direction splits: {len(x_divs)} at positions: {[float(x) for x in x_divs]}")
-        print(f"Y-direction splits: {len(y_divs)} at positions: {[float(y) for y in y_divs]}")
-        print(f"Subdomain width (x): {float(wx):.2f}")
-        print(f"Subdomain width (y): {float(wy):.2f}")
-        print(f"Overlap parameter: {float(wx - 1/len(x_divs)):.2f} in x, {float(wy - 1/len(y_divs)):.2f} in y")
-
-        # Calculate overlap statistics
-        unique_overlaps = np.unique(overlap_map)
-        print(f"\nOverlap statistics:")
-        for overlap_count in unique_overlaps:
-            coverage = np.sum(overlap_map == overlap_count) / overlap_map.size * 100
-            print(f"  {int(overlap_count)} subdomain(s): {coverage:.1f}% of domain")
-
+        plt.suptitle('Spatial Distribution of PDE Residuals', fontsize=14, fontweight='bold')
         plt.tight_layout()
-
-        # Save the figure if path is provided
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"\nDomain decomposition figure saved to: {save_path}")
-
         plt.show()
 
-        print("="*60)
+        # Print analysis
+        print("\nSpatial Residual Analysis:")
+        print("="*50)
+
+        # Find regions with highest errors
+        n_points = residuals['mechanics_x'].shape[0]
+        total_residual_flat = total_residual.flatten()
+        max_idx = jnp.argmax(total_residual_flat)
+        max_i, max_j = max_idx // n_points, max_idx % n_points
+        max_x = residuals['x'][max_i, max_j]
+        max_y = residuals['y'][max_i, max_j]
+
+        print(f"Maximum total residual location: (x={max_x:.3f}, y={max_y:.3f})")
+        print(f"Maximum total residual value: {jnp.max(total_residual):.2e}")
+
+        # Check if errors are concentrated near boundaries or corners
+        boundary_mask = (residuals['x'] < 0.2) | (residuals['x'] > 0.8) | \
+                      (residuals['y'] < 0.2) | (residuals['y'] > 0.8)
+        interior_mask = ~boundary_mask
+
+        boundary_error = jnp.mean(total_residual[boundary_mask]) if jnp.any(boundary_mask) else 0
+        interior_error = jnp.mean(total_residual[interior_mask]) if jnp.any(interior_mask) else 0
+
+        print(f"\nAverage residual near boundaries: {boundary_error:.2e}")
+        print(f"Average residual in interior: {interior_error:.2e}")
+
+        if boundary_error > 2 * interior_error:
+            print(" Higher errors near boundaries - consider refined boundary treatment")
+        elif interior_error > 2 * boundary_error:
+            print(" Higher errors in interior - consider more training or deeper network")
+        else:
+            print(" Errors are relatively uniform across the domain")
 
         return fig, axes
+
+    def visualize_domain_decomposition(self, save_path=None):
+      """
+      Visualize the FBPINN domain decomposition with subdomain boundaries and overlaps.
+      Can be called before or after training.
+
+      Args:
+          save_path: Optional path to save the figure 
+
+      Returns:
+          fig, axes: Matplotlib figure and axes objects
+      """
+      print("\n" + "="*60)
+      print("FBPINN DOMAIN DECOMPOSITION")
+      print("="*60)
+
+      # Get subdomain parameters from config (available before training)
+      subdomain_xs = self.config.decomposition_init_kwargs['subdomain_xs']
+      subdomain_ws = self.config.decomposition_init_kwargs['subdomain_ws']
+
+      # Calculate total number of subdomains
+      m = len(subdomain_xs[0]) * len(subdomain_xs[1])
+
+      # Create figure
+      fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+      # Left plot: Subdomain boundaries
+      ax1 = axes[0]
+
+      # Get x and y divisions
+      x_divs = subdomain_xs[0]
+      y_divs = subdomain_xs[1]
+      wx = subdomain_ws[0][0]  # Assuming uniform weights
+      wy = subdomain_ws[1][0]
+
+      # Plot the main domain
+      ax1.add_patch(plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor='black', linewidth=2))
+
+      # Plot subdomain centers and boundaries
+      colors = plt.cm.Set3(np.linspace(0, 1, m))
+      subdomain_idx = 0
+
+      for i, x_center in enumerate(x_divs):
+          for j, y_center in enumerate(y_divs):
+              # Calculate subdomain boundaries with overlap
+              x_min = max(0, float(x_center - wx/2))
+              x_max = min(1, float(x_center + wx/2))
+              y_min = max(0, float(y_center - wy/2))
+              y_max = min(1, float(y_center + wy/2))
+
+              # Plot subdomain
+              rect = plt.Rectangle((x_min, y_min), x_max-x_min, y_max-y_min,
+                                  fill=True, facecolor=colors[subdomain_idx],
+                                  alpha=0.3, edgecolor=colors[subdomain_idx],
+                                  linewidth=1.5)
+              ax1.add_patch(rect)
+
+              # Add subdomain number
+              ax1.text(float(x_center), float(y_center), f'{subdomain_idx+1}',
+                      ha='center', va='center', fontsize=12, fontweight='bold')
+
+              # Mark center point
+              ax1.plot(float(x_center), float(y_center), 'ko', markersize=6)
+
+              subdomain_idx += 1
+
+      ax1.set_xlim(-0.05, 1.05)
+      ax1.set_ylim(-0.05, 1.05)
+      ax1.set_xlabel('x')
+      ax1.set_ylabel('y')
+      ax1.set_title(f'FBPINN Decomposition ({m} subdomains)')
+      ax1.set_aspect('equal')
+      ax1.grid(True, alpha=0.3)
+
+      # Right plot: Overlap visualization
+      ax2 = axes[1]
+
+      # Create overlap intensity map
+      overlap_map = np.zeros((100, 100))
+      x_grid = np.linspace(0, 1, 100)
+      y_grid = np.linspace(0, 1, 100)
+
+      for i, x_center in enumerate(x_divs):
+          for j, y_center in enumerate(y_divs):
+              x_min = max(0, float(x_center - wx/2))
+              x_max = min(1, float(x_center + wx/2))
+              y_min = max(0, float(y_center - wy/2))
+              y_max = min(1, float(y_center + wy/2))
+
+              # Find grid points in this subdomain
+              x_mask = (x_grid >= x_min) & (x_grid <= x_max)
+              y_mask = (y_grid >= y_min) & (y_grid <= y_max)
+
+              for xi in np.where(x_mask)[0]:
+                  for yi in np.where(y_mask)[0]:
+                      overlap_map[yi, xi] += 1
+
+      im = ax2.imshow(overlap_map, extent=[0, 1, 0, 1], origin='lower',
+                      cmap='YlOrRd', aspect='equal')
+      ax2.set_xlabel('x')
+      ax2.set_ylabel('y')
+      ax2.set_title('Subdomain Overlap (Number of overlapping subdomains)')
+      plt.colorbar(im, ax=ax2, label='Number of subdomains')
+
+      # Add grid lines at subdomain boundaries
+      for x in x_divs:
+          ax2.axvline(float(x), color='black', linestyle='--', alpha=0.3)
+      for y in y_divs:
+          ax2.axhline(float(y), color='black', linestyle='--', alpha=0.3)
+
+      # Print decomposition info
+      print(f"Total subdomains: {m}")
+      print(f"X-direction splits: {len(x_divs)} at positions: {[float(x) for x in x_divs]}")
+      print(f"Y-direction splits: {len(y_divs)} at positions: {[float(y) for y in y_divs]}")
+      print(f"Subdomain width (x): {float(wx):.2f}")
+      print(f"Subdomain width (y): {float(wy):.2f}")
+      print(f"Overlap parameter: {float(wx - 1/len(x_divs)):.2f} in x, {float(wy - 1/len(y_divs)):.2f} in y")
+
+      # Calculate overlap statistics
+      unique_overlaps = np.unique(overlap_map)
+      print(f"\nOverlap statistics:")
+      for overlap_count in unique_overlaps:
+          coverage = np.sum(overlap_map == overlap_count) / overlap_map.size * 100
+          print(f"  {int(overlap_count)} subdomain(s): {coverage:.1f}% of domain")
+
+      plt.tight_layout()
+
+      # Save the figure if path is provided
+      if save_path:
+          plt.savefig(save_path, dpi=150, bbox_inches='tight')
+          print(f"\nDomain decomposition figure saved to: {save_path}")
+
+      plt.show()
+
+      print("="*60)
+
+      return fig, axes
 
     def save_checkpoint(self, filepath):
         """Save model checkpoint."""
