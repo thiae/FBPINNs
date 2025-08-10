@@ -332,13 +332,13 @@ class BiotCoupledTrainer:
                 'subdomain_xs': [
                     jnp.linspace(0, 1, 3), 
                     jnp.linspace(0, 1, 3), 
-                    jnp.linspace(0, 1, 2)
+                    jnp.linspace(0, 1, 3)
                     ],
                 # Subdomain widths.  Overlap is controlled by these values.
                 'subdomain_ws': [
                     0.8 * jnp.ones(3),
                     0.8 * jnp.ones(3), 
-                    1.0 * jnp.ones(2)
+                    0.8 * jnp.ones(2)
                     ],
                 'unnorm': (0., 1.)
             },
