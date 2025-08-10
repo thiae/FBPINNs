@@ -135,6 +135,13 @@ def _plot_test_im(u_test, xlim, ulim, n_test, it=None, output_idx=0):
         output_idx: Which output component to plot (0 for ux, 1 for uy, etc.)
     """
     
+    # Handle None case (no exact solution)
+    if u_test is None:
+        plt.text(0.5, 0.5, 'No exact solution available', 
+                ha='center', va='center', transform=plt.gca().transAxes,
+                fontsize=12, color='red')
+        return
+    
     # Handle multi-output case
     if u_test.ndim == 2 and u_test.shape[1] > 1:
         # Multi-output: select the specified component

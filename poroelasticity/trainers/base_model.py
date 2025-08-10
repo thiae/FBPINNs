@@ -338,7 +338,7 @@ class BiotCoupledTrainer:
                 'subdomain_ws': [
                     0.8 * jnp.ones(3),
                     0.8 * jnp.ones(3), 
-                    0.8 * jnp.ones(2)
+                    0.8 * jnp.ones(3)
                     ],
                 'unnorm': (0., 1.)
             },
@@ -357,6 +357,7 @@ class BiotCoupledTrainer:
             test_freq=250,
             show_figures=False,
             save_figures=False,
+            test_freq=10000,  # Set very high to avoid plotting during training
             clear_output=True
         )
         self.trainer = FBPINNTrainer(self.config)

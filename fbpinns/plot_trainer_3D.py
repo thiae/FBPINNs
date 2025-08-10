@@ -37,11 +37,21 @@ def plot_3D_FBPINN(x_batch_test, u_exact, u_test, us_test, ws_test, us_raw_test,
 
         plt.subplot2grid(shape,(1+it,1))
         plt.title(f"[{i}] Ground truth")
-        _plot_test_im(u_exact, xlim0, ulim, n_test, it=it)
+        if u_exact is not None:
+            _plot_test_im(u_exact, xlim0, ulim, n_test, it=it)
+        else:
+            plt.text(0.5, 0.5, 'No exact solution available', 
+                    ha='center', va='center', transform=plt.gca().transAxes,
+                    fontsize=12, color='red')
 
         plt.subplot2grid(shape,(1+it,2))
         plt.title(f"[{i}] Difference")
-        _plot_test_im(u_exact - u_test, xlim0, ulim, n_test, it=it)
+        if u_exact is not None:
+            _plot_test_im(u_exact - u_test, xlim0, ulim, n_test, it=it)
+        else:
+            plt.text(0.5, 0.5, 'No exact solution available', 
+                    ha='center', va='center', transform=plt.gca().transAxes,
+                    fontsize=12, color='red')
 
     # plot raw hist
     plt.subplot2grid(shape,(1+nt,0))
@@ -81,11 +91,21 @@ def plot_3D_PINN(x_batch_test, u_exact, u_test, u_raw_test, x_batch, all_params,
 
         plt.subplot2grid(shape,(1+it,1))
         plt.title(f"[{i}] Ground truth")
-        _plot_test_im(u_exact, xlim0, ulim, n_test, it=it)
+        if u_exact is not None:
+            _plot_test_im(u_exact, xlim0, ulim, n_test, it=it)
+        else:
+            plt.text(0.5, 0.5, 'No exact solution available', 
+                    ha='center', va='center', transform=plt.gca().transAxes,
+                    fontsize=12, color='red')
 
         plt.subplot2grid(shape,(1+it,2))
         plt.title(f"[{i}] Difference")
-        _plot_test_im(u_exact - u_test, xlim0, ulim, n_test, it=it)
+        if u_exact is not None:
+            _plot_test_im(u_exact - u_test, xlim0, ulim, n_test, it=it)
+        else:
+            plt.text(0.5, 0.5, 'No exact solution available', 
+                    ha='center', va='center', transform=plt.gca().transAxes,
+                    fontsize=12, color='red')
 
     # plot raw hist
     plt.subplot2grid(shape,(1+nt,0))
