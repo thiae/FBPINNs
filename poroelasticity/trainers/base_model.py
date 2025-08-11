@@ -11,7 +11,7 @@ from fbpinns.problems import Problem
 from fbpinns.decompositions import RectangularDecompositionND
 from fbpinns.networks import FCN
 from fbpinns.constants import Constants
-from fbpinns.trainers import FBPINNTrainer
+from fbpinns.trainers import FBPINNTrainer, get_inputs, FBPINN_model_jit
 
 class BiotCoupled2D(Problem):
     """
@@ -596,25 +596,38 @@ class BiotCoupledTrainer:
             flow_scale = jnp.sqrt(darcy_scale**2 + s_pt**2 + s_comp**2)
 
         else:  # 'fd_xy_ad_t'  (recommended)
-            # Autodiff in t, FD in x,y. Chunked to save memory.
-            def comp_t(idx):
-                def f(x,y,t): 
-                  X = jnp.stack([x, y, t], axis=-1)
-                  return self.predict(X.reshape(1,-1))[0, idx]
-                return jax.grad(f, argnums=2)
+            # Autodiff in t via a single JVP over the full XYT grid + FD in x,y.
+            # This avoids per-point shape changes during autodiff and is JAX-JIT friendly.
 
-            def vmap_chunks3(fn, xs, ys, ts, chunk):
-                outs = []
-                N = xs.shape[0]
-                for i in range(0, N, chunk):
-                    outs.append(jax.vmap(fn)(xs[i:i+chunk], ys[i:i+chunk], ts[i:i+chunk]))
-                return jnp.concatenate(outs, axis=0)
+            # Precompute takes/cuts once on the whole grid to keep shapes static
+            m = self.config.decomposition_init_kwargs['subdomain_xs'][0].shape[0] * \
+                self.config.decomposition_init_kwargs['subdomain_xs'][1].shape[0]
+            active_all = jnp.ones(self.all_params["static"]["decomposition"]["m"], dtype=jnp.int32)
+            takes, _, (_, _, _, cut_all, _)  = get_inputs(XYT, active_all, self.all_params, self.config.decomposition)
 
-            xs, ys, ts = XYT[:,0], XYT[:,1], XYT[:,2]
-            p_t  = vmap_chunks3(comp_t(2), xs, ys, ts, chunk)
-            ux_t = vmap_chunks3(comp_t(0), xs, ys, ts, chunk).reshape(n_points, n_points)
-            uy_t = vmap_chunks3(comp_t(1), xs, ys, ts, chunk).reshape(n_points, n_points)
-            
+            # Build a batched predictor using fixed takes/cuts
+            def predict_batch(xyt_batch):
+                all_params_cut = {
+                    "static": cut_all(self.all_params["static"]),
+                    "trainable": cut_all(self.all_params["trainable"]),
+                }
+                norm_fn, network_fn = self.config.decomposition.norm_fn, self.config.network.network_fn
+                unnorm_fn, window_fn = self.config.decomposition.unnorm_fn, self.config.decomposition.window_fn
+                constraining_fn = self.config.problem.constraining_fn
+                model_fns = (norm_fn, network_fn, unnorm_fn, window_fn, constraining_fn)
+                u, *_ = FBPINN_model_jit(all_params_cut, xyt_batch, takes, model_fns, verbose=False)
+                return u
+
+            # JVP in the direction of +t
+            V = jnp.zeros_like(XYT)
+            V = V.at[:, 2].set(1.0)
+            _, dudt = jax.jvp(predict_batch, (XYT,), (V,))
+
+            # Extract components and compute spatial derivatives of time-derivatives
+            p_t  = dudt[:, 2]
+            ux_t = dudt[:, 0].reshape(n_points, n_points)
+            uy_t = dudt[:, 1].reshape(n_points, n_points)
+
             dux_dx_t = fd_grad_x(ux_t).flatten()
             duy_dy_t = fd_grad_y(uy_t).flatten()
 

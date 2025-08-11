@@ -250,14 +250,27 @@ class RectangularDecompositionND(Decomposition):
     def inside_points(all_params, x_batch):
         m = all_params["static"]["decomposition"]["m"]
         ims = jnp.arange(m)
-        batch_size = min(int(1e9/(4*ims.shape[0])), x_batch.shape[0])# limit GPU memory
+        # Choose a static batch size to satisfy JAX's static arg requirement.
+        # If x_batch.shape[0] is traced (e.g., during autodiff), fall back to a conservative cap.
+        cap = int(1e9 / (4 * int(ims.shape[0])))
+        try:
+            n_pts = int(x_batch.shape[0])
+        except Exception:
+            n_pts = cap
+        batch_size = min(cap, n_pts)
         all_params = {"params": all_params["static"]["decomposition"]["subdomain"]["params"]}# filter out subdomain params
         return inside_points_batch(all_params, x_batch, ims, batch_size,
                                    RectangularDecompositionND._inside_rectangleND)
 
     @staticmethod
     def inside_models(all_params, x_batch, ims):
-        batch_size = min(int(1e9/(4*ims.shape[0])), x_batch.shape[0])# limit GPU memory
+        # Same static batch sizing as in inside_points
+        cap = int(1e9 / (4 * int(ims.shape[0])))
+        try:
+            n_pts = int(x_batch.shape[0])
+        except Exception:
+            n_pts = cap
+        batch_size = min(cap, n_pts)
         all_params = {"params": all_params["static"]["decomposition"]["subdomain"]["params"]}# filter out subdomain params
         return inside_models_batch(all_params, x_batch, ims, batch_size,
                                    RectangularDecompositionND._inside_rectangleND)
