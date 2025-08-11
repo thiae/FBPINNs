@@ -364,7 +364,6 @@ class BiotCoupledTrainer:
             test_freq=250,
             show_figures=False,
             save_figures=False,
-            test_freq=250,  
             clear_output=True
         )
         self.trainer = FBPINNTrainer(self.config)
