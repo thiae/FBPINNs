@@ -348,17 +348,15 @@ class BiotCoupledTrainer:
             },
             network=FCN,
             network_init_kwargs={
-                # Increased network capacity: three hidden layers with 256 neurons
-                # each, activated by tanh.  The network maps (x,y,t) → (u_x,u_y,p).
-                'layer_sizes': [3, 256, 256, 256, 3], 
+                # Balanced network: 128 neurons for good capacity without memory overflow
+                'layer_sizes': [3, 128, 128, 128, 3], 
                 'activation': 'tanh'
                 },
-            # Sampling shapes: interior in (x,y,t).  We increase the number
-            # of collocation points to (100,100,39) for x, y, and t.  The
-            # boundary batches remain zero because BCs are hard enforced.
-            ns=((100, 100, 39), (0,), (0,), (0,), (0,)), 
+            # Sampling shapes: interior in (x,y,t).  Reduced for A100 memory limits:
+            # 80×80×20 = 128k points (down from 390k) for stable GPU training
+            ns=((80, 80, 20), (0,), (0,), (0,), (0,)), 
             n_test=(20, 20, 5),
-            n_steps=10000,  
+            n_steps=8000,  # Reduced for faster iteration and memory efficiency  
             optimiser_kwargs={'learning_rate': 1e-3},
             summary_freq=100,
             test_freq=250,
