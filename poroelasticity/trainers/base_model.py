@@ -1062,15 +1062,7 @@ class BiotCoupledTrainer:
             pickle.dump(checkpoint, f)
         print(f"Checkpoint saved to {filepath}")
 
-#  convenient functions
+#  Create Trainer
 def FixedTrainer():
     """Create a trainer with CORRECT hard BC enforcement"""
-    return BiotCoupledTrainer()
-
-def CoupledTrainer():
-    """Compatibility alias"""
-    return BiotCoupledTrainer()
-
-def ResearchTrainer():
-    """Compatibility alias"""
     return BiotCoupledTrainer()
