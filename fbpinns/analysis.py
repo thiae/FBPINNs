@@ -11,7 +11,7 @@ import numpy as np
 
 from fbpinns.util.logger import logger
 from fbpinns.util.other import DictToObj
-from fbpinns.trainers import get_inputs, FBPINN_model, PINN_model
+from fbpinns.trainers import get_inputs, FBPINN_model_jit, PINN_model
 from fbpinns import networks
 
 
@@ -54,7 +54,7 @@ def FBPINN_solution(c, all_params, active, x_batch):
     takes, _, (_, _, _, cut_all, _) = get_inputs(x_batch, active, all_params, decomposition)
     all_params_cut = {"static":cut_all(all_params["static"]),
                       "trainable":cut_all(all_params["trainable"])}
-    u, *_ = FBPINN_model(all_params_cut, x_batch, takes, model_fns)
+    u, *_ = FBPINN_model_jit(all_params_cut, x_batch, takes, model_fns, verbose=False)
     return u
 
 def PINN_solution(c, all_params, x_batch):

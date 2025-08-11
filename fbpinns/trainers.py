@@ -237,20 +237,22 @@ def _get_ujs(x_batch, jmaps, u):
     ujs = []
     for il,io,iu in jac_is:
         # il: layer index, io: output index (0 for ux, 1 for uy), iu: derivative index
-        jac_tensor = jacs[il] [io]
+        jac_tensor = jacs[il][io]
 
-        # Handle different tensor shapes robustly
-        if jac_tensor.ndim >= 2:
-            # Multiple-dimensional case: select component along last axis
-            if iu < jac_tensor.shape[-1]:
-                uj = jac_tensor[..., iu:iu+1] # Preserves dimension
-            else:
-                # Handle edge case where iu is out of bounds
-                uj = jac_tensor[..., :1] * 0 # Zero tensor with correct shape
+        # Robust selection that avoids dynamic slice syntax; always use gather semantics
+        if jac_tensor.ndim >= 1:
+            # Take along last axis and keep dims
+            idx = jnp.array([iu])
+            # If out of bounds, clamp to 0 and zero-out (keeps static behavior)
+            safe_i = jnp.minimum(idx, jnp.array([max(jac_tensor.shape[-1]-1, 0)]))
+            gathered = jnp.take(jac_tensor, safe_i, axis=-1)
+            # Zero if original iu was out of bounds
+            mask = (idx == safe_i)
+            uj = gathered * mask.astype(gathered.dtype)
         else:
-            # 1D case: Simpler indexing
-            uj = jac_tensor[..., None] # Add dimension
-        ujs.append(uj) 
+            # Scalar derivative: add a singleton last dimension
+            uj = jac_tensor[..., None]
+        ujs.append(uj)
         #uj = jacs[il][io][..., iu] # supports multiple output without slicing errors
         #ujs.append(uj) 
 
@@ -379,12 +381,11 @@ def get_inputs(x_batch, active, all_params, decomposition):
     mask = mask.at[training_ims].set(1)
     active = active * mask
     ims_ = jnp.arange(all_params["static"]["decomposition"]["m"])
-    # Use JAX-compatible approach: compress with nonzero instead of boolean indexing
-    active_ims = jnp.nonzero(active == 1, size=all_params["static"]["decomposition"]["m"])[0]
-    fixed_ims = jnp.nonzero(active == 2, size=all_params["static"]["decomposition"]["m"])[0]
-    # Filter out the fill values (which are set to the last valid index by default)
-    active_ims = active_ims[:jnp.sum(active == 1)]
-    fixed_ims = fixed_ims[:jnp.sum(active == 2)]
+    # Get concrete indices on host to avoid dynamic slice indices under JIT
+    am = (active == 1)
+    fm = (active == 2)
+    active_ims = jnp.asarray(jax.device_get(jnp.nonzero(am)[0]), dtype=int)
+    fixed_ims  = jnp.asarray(jax.device_get(jnp.nonzero(fm)[0]), dtype=int)
     logger.debug("updated active")
     logger.debug(active)
     logger.debug("active_ims")
@@ -522,11 +523,9 @@ class FBPINNTrainer(_Trainer):
 
         # cut active points out of x_batch_global
         m = all_params["static"]["decomposition"]["m"]
-        # JAX-tracing safe: avoid boolean mask indexing; use nonzero with static size then trim
+        # JAX-tracing safe: get concrete indices on host, no dynamic slice
         active_mask = (active == 1)
-        ims_all = jnp.nonzero(active_mask, size=m)[0]
-        n_active = jnp.sum(active_mask)
-        ims = ims_all[:n_active]
+        ims = jnp.asarray(jax.device_get(jnp.nonzero(active_mask)[0]), dtype=int)
         training_ips, _d = decomposition.inside_models(all_params, x_batch_global, ims)  # (n, mc)
         x_batch = x_batch_global[training_ips]
 
