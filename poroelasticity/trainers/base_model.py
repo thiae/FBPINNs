@@ -598,20 +598,23 @@ class BiotCoupledTrainer:
         else:  # 'fd_xy_ad_t'  (recommended)
             # Autodiff in t, FD in x,y. Chunked to save memory.
             def comp_t(idx):
-                def f(xyt): return self.predict(xyt.reshape(1,-1))[0, idx]
+                def f(x,y,t): 
+                  X = jnp.stack([x, y, t], axis=-1)
+                  return self.predict(X.reshape(1,-1))[0, idx]
                 return jax.grad(f, argnums=2)
 
-            def vmap_chunks(fn, arr, chunk):
+            def vmap_chunks3(fn, xs, ys, ts, chunk):
                 outs = []
-                N = arr.shape[0]
+                N = xs.shape[0]
                 for i in range(0, N, chunk):
-                    outs.append(jax.vmap(fn)(arr[i:i+chunk]))
+                    outs.append(jax.vmap(fn)(xs[i:i+chunk], ys[i:i+chunk], ts[i:i+chunk]))
                 return jnp.concatenate(outs, axis=0)
 
-            p_t  = vmap_chunks(comp_t(2), XYT, chunk)
-            ux_t = vmap_chunks(comp_t(0), XYT, chunk).reshape(n_points, n_points)
-            uy_t = vmap_chunks(comp_t(1), XYT, chunk).reshape(n_points, n_points)
-
+            xs, ys, ts = XYT[:,0], XYT[:,1], XYT[:,2]
+            p_t  = vmap_chunks3(comp_t(2), xs, ys, ts, chunk)
+            ux_t = vmap_chunks3(comp_t(0), xs, ys, ts, chunk).reshape(n_points, n_points)
+            uy_t = vmap_chunks3(comp_t(1), xs, ys, ts, chunk).reshape(n_points, n_points)
+            
             dux_dx_t = fd_grad_x(ux_t).flatten()
             duy_dy_t = fd_grad_y(uy_t).flatten()
 
