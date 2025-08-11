@@ -373,13 +373,18 @@ def get_inputs(x_batch, active, all_params, decomposition):
     assert jnp.isin(active, jnp.array([0,1,2])).all()
     assert active.shape == (all_params["static"]["decomposition"]["m"],)
 
-    active = active.at[active==0].set(1)# set inactive models to active
+    # JAX-tracing compatible version: use jnp.where instead of boolean indexing
+    active = jnp.where(active == 0, 1, active)  # set inactive models to active
     mask = jnp.zeros_like(active)# mask out models in training points
     mask = mask.at[training_ims].set(1)
-    active = active*mask
+    active = active * mask
     ims_ = jnp.arange(all_params["static"]["decomposition"]["m"])
-    active_ims = ims_[active==1]# assume unsorted
-    fixed_ims = ims_[active==2]
+    # Use JAX-compatible approach: compress with nonzero instead of boolean indexing
+    active_ims = jnp.nonzero(active == 1, size=all_params["static"]["decomposition"]["m"])[0]
+    fixed_ims = jnp.nonzero(active == 2, size=all_params["static"]["decomposition"]["m"])[0]
+    # Filter out the fill values (which are set to the last valid index by default)
+    active_ims = active_ims[:jnp.sum(active == 1)]
+    fixed_ims = fixed_ims[:jnp.sum(active == 2)]
     logger.debug("updated active")
     logger.debug(active)
     logger.debug("active_ims")
