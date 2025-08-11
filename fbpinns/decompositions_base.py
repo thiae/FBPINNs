@@ -70,7 +70,10 @@ def _inside_take_batch(all_params, x_batch, ims, batch_size, inside_fn, s, irang
 def inside_points_batch(all_params, x_batch, ims, batch_size, inside_fn):
     assert batch_size <= x_batch.shape[0]
     (s, inside_ips, inside_ims, d), irange, mask = _inside_sum_batch(all_params, x_batch, ims, batch_size, inside_fn)
-    inside_ims = jnp.arange(ims.shape[0])[inside_ims]
+    # JAX-safe: avoid boolean mask indexing; use nonzero with static size then trim
+    inside_ims_all = jnp.nonzero(inside_ims, size=ims.shape[0])[0]
+    n_inside_ims = jnp.sum(inside_ims)
+    inside_ims = inside_ims_all[:n_inside_ims]
     s = s.item()
     take = _inside_take_batch(all_params, x_batch, ims, batch_size, inside_fn, s, irange, mask)
     return take[:,0], take[:,1], inside_ims
@@ -78,7 +81,10 @@ def inside_points_batch(all_params, x_batch, ims, batch_size, inside_fn):
 def inside_models_batch(all_params, x_batch, ims, batch_size, inside_fn):
     assert batch_size <= x_batch.shape[0]
     (s, inside_ips, inside_ims, d), irange, mask = _inside_sum_batch(all_params, x_batch, ims, batch_size, inside_fn)
-    inside_ips = jnp.arange(x_batch.shape[0])[inside_ips]
+    # JAX-safe: avoid boolean mask indexing; use nonzero with static size then trim
+    inside_ips_all = jnp.nonzero(inside_ips, size=x_batch.shape[0])[0]
+    n_inside_ips = jnp.sum(inside_ips)
+    inside_ips = inside_ips_all[:n_inside_ips]
     return inside_ips, d
 
 

@@ -521,8 +521,13 @@ class FBPINNTrainer(_Trainer):
         "Get the x_batch points from x_batch_global which are inside active models"
 
         # cut active points out of x_batch_global
-        ims = jnp.arange(all_params["static"]["decomposition"]["m"])[active==1]
-        training_ips, _d = decomposition.inside_models(all_params, x_batch_global, ims)# (n, mc)
+        m = all_params["static"]["decomposition"]["m"]
+        # JAX-tracing safe: avoid boolean mask indexing; use nonzero with static size then trim
+        active_mask = (active == 1)
+        ims_all = jnp.nonzero(active_mask, size=m)[0]
+        n_active = jnp.sum(active_mask)
+        ims = ims_all[:n_active]
+        training_ips, _d = decomposition.inside_models(all_params, x_batch_global, ims)  # (n, mc)
         x_batch = x_batch_global[training_ips]
 
         # report
@@ -531,12 +536,13 @@ class FBPINNTrainer(_Trainer):
         logger.debug(str_tensor(x_batch))
 
         # cut same points out of constraints_global
-        constraint_fs = constraint_fs_global[training_ips]# for each training point, whether in constraint
-        ix_ = jnp.arange(x_batch.shape[0])
-        constraint_ips = [ix_[f] for f in constraint_fs.T]# indices of training points in each constraint
-        constraints = [[c_[training_ips[constraint_ips[ic]]-constraint_offsets_global[ic]]
-                        for c_ in constraints_global[ic]]
-                       for ic in range(len(constraints_global))]# cut constraints
+        constraint_fs = constraint_fs_global[training_ips]  # for each training point, whether in constraint
+        # Build indices per-constraint without boolean indexing on JAX arrays
+        constraint_ips = [jnp.where(f)[0] for f in constraint_fs.T]
+        constraints = [
+            [c_[training_ips[ips] - constraint_offsets_global[ic]] for c_ in constraints_global[ic]]
+            for ic, ips in enumerate(constraint_ips)
+        ]  # cut constraints
         logger.debug("constraints")
         logger.debug(jax.tree_util.tree_map(lambda x: str_tensor(x), constraints))
         logger.debug(jax.tree_util.tree_map(lambda x: str_tensor(x), constraint_ips))
