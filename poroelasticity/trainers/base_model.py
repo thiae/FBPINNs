@@ -70,7 +70,7 @@ class BiotCoupled2D(Problem):
         static_params = {
             # dims = (number of outputs, number of inputs)
             # outputs: (u_x, u_y, p); inputs: (x, y, t)
-            "dims": (3, 3),  
+            "dims": (3, 3),
             "E": E,
             "nu": nu,
             "G": G,
@@ -118,9 +118,9 @@ class BiotCoupled2D(Problem):
             conditions.
         """
 
-        x = x_batch[:, 0:1]  
-        y = x_batch[:, 1:2]  
-        t = x_batch[:, 2:3]  
+        x = x_batch[:, 0:1]
+        y = x_batch[:, 1:2]
+        t = x_batch[:, 2:3]
 
         ux_raw = u[:, 0:1]
         uy_raw = u[:, 1:2]
@@ -142,22 +142,22 @@ class BiotCoupled2D(Problem):
         gauss_y = jnp.exp(-((y - injection_center)**2) / (2.0 * sigma**2))
         pL = p0 + S(t) * gauss_y
         # Right boundary pressure p_R(y, t) = 0 (far‑field)
-        pR = p0 * 0.0  
+        pR = p0 * 0.0
 
         # Hard Dirichlet conditions for displacement.  Multiplying by x and y
         # enforces u_x(0, ·, ·) = 0 and u_y(·, 0, ·) = 0, and multiplying by
         # S(t) ensures u = 0 at t=0.
-        ux = S(t) * x * ux_raw           
-        uy = S(t) * x * y * uy_raw       
+        ux = S(t) * x * ux_raw
+        uy = S(t) * x * y * uy_raw
 
         # Pressure ansatz combining initial condition, boundary conditions,
         # and learnable interior variation.  The factor x(1-x) ensures that
         # the interior term vanishes on x=0 and x=1 so it cannot violate
         # Dirichlet conditions.  Multiplication by S(t) enforces p = p0 at t=0.
         p = (
-            p0 
-            + (1.0 - x) * (pL - p0) 
-            + x * (pR - p0) 
+            p0
+            + (1.0 - x) * (pL - p0)
+            + x * (pR - p0)
             + x * (1.0 - x) * S(t) * p_raw
         )
 
@@ -232,7 +232,7 @@ class BiotCoupled2D(Problem):
 
     @staticmethod
     def loss_fn(all_params, constraints):
-    
+
         """
         Compute the mean squared residuals of the Biot equations.
 
@@ -261,17 +261,17 @@ class BiotCoupled2D(Problem):
 
         # Momentum equilibrium residuals: ∇·σ=0 with σ = 2G ε + λ tr(ε) I − αp I  (keep the minus!)
         equilibrium_x = (
-            (2 * G + lam) * d2uxdx2 
-            + lam * d2uydxdy 
-            + G * d2uxdy2 
-            + G * d2uydxdy 
+            (2 * G + lam) * d2uxdx2
+            + lam * d2uydxdy
+            + G * d2uxdy2
+            + G * d2uydxdy
             - alpha * dpdx
             )
         equilibrium_y = (
-            G * d2uxdxdy 
-            + G * d2uydx2 
-            + lam * d2uxdxdy 
-            + (2 * G + lam) * d2uydy2 
+            G * d2uxdxdy
+            + G * d2uydx2
+            + lam * d2uxdxdy
+            + (2 * G + lam) * d2uydy2
             - alpha * dpdy)
 
        # Mass balance residual: (1/M) p_t + α ∂t(div u) − ∇·((k/μ)∇p) = 0  (homog. k => ∇k=0)
@@ -314,16 +314,16 @@ class BiotCoupledTrainer:
             run="biot_coupled_2d",
             domain=RectangularDomainND,
             domain_init_kwargs={
-                'xmin': jnp.array([0.0, 0.0, 0.0]), 
+                'xmin': jnp.array([0.0, 0.0, 0.0]),
                 'xmax': jnp.array([1.0, 1.0, 1.0])
                 },
             problem=BiotCoupled2D,
             problem_init_kwargs={
-                'E': 5000.0, 
-                'nu': 0.25, 
-                'alpha': 0.8, 
-                'k': 1.0, 
-                'mu': 1.0, 
+                'E': 5000.0,
+                'nu': 0.25,
+                'alpha': 0.8,
+                'k': 1.0,
+                'mu': 1.0,
                 'M': 100.0
                 },
             decomposition=RectangularDecompositionND,
@@ -332,8 +332,8 @@ class BiotCoupledTrainer:
                 # each direction to balance resolution and overlap across space
                 # and time.
                 'subdomain_xs': [
-                    jnp.linspace(0, 1, 3), 
-                    jnp.linspace(0, 1, 3), 
+                    jnp.linspace(0, 1, 3),
+                    jnp.linspace(0, 1, 3),
                     jnp.linspace(0, 1, 3)
                     ],
                 # Subdomain widths. An overlap of 0.8 in each dimension
@@ -341,7 +341,7 @@ class BiotCoupledTrainer:
                 # applies to the time dimension as well.
                 'subdomain_ws': [
                     0.8 * jnp.ones(3),
-                    0.8 * jnp.ones(3), 
+                    0.8 * jnp.ones(3),
                     0.8 * jnp.ones(3)
                     ],
                 'unnorm': (0., 1.)
@@ -350,15 +350,15 @@ class BiotCoupledTrainer:
             network_init_kwargs={
                 # Increased network capacity: three hidden layers with 128 neurons
                 # each, activated by tanh.  The network maps (x,y,t) → (u_x,u_y,p).
-                'layer_sizes': [3, 128, 128, 128, 3], 
+                'layer_sizes': [3, 128, 128, 128, 3],
                 'activation': 'tanh'
                 },
             # Sampling shapes: interior in (x,y,t).  We increase the number
-            # of collocation points to (100,100,39) for x, y, and t.  The
+            # of collocation points to (80,80,20) for x, y, and t.  The
             # boundary batches remain zero because BCs are hard enforced.
-            ns=((80, 80, 20), (0,), (0,), (0,), (0,)), 
+            ns=((80, 80, 20), (0,), (0,), (0,), (0,)),
             n_test=(20, 20, 5),
-            n_steps=8000,    
+            n_steps=8000,
             optimiser_kwargs={'learning_rate': 1e-3},
             summary_freq=100,
             test_freq=250,
@@ -388,7 +388,7 @@ class BiotCoupledTrainer:
         if self.all_params is None:
             raise ValueError("Model not trained yet")
         x_points = jnp.array(x_points)
-        if x_points.shape[1] == 2: 
+        if x_points.shape[1] == 2:
             tcol = jnp.full((x_points.shape[0], 1), float(t))
             x_points = jnp.concatenate([x_points, tcol], axis=1)
         from fbpinns.analysis import FBPINN_solution
@@ -400,7 +400,7 @@ class BiotCoupledTrainer:
         """
         Evaluate the maximum violation of hard boundary conditions at time t.
         """
-  
+
         print("\n" + "="*60)
         print(f"Boundary Conditon Verification at t={t}")
         print("="*60)
@@ -448,7 +448,7 @@ class BiotCoupledTrainer:
             print(f"\nStatus: CHECK - Max violation: {max_violation:.3e}")
         return max_violation < 1e-2
 
-    def compute_physics_metrics(self, n_points=50, method='autodiff'):
+    def compute_physics_metrics(self, n_points=50, method='fd_xy_ad_t', t=1.0, chunk=4096):
         """
         Compute physics validation metrics on a regular grid.
 
@@ -473,210 +473,225 @@ class BiotCoupledTrainer:
         dict
             Dictionary containing absolute and relative residual metrics and
             diagnostic scales.
+
+        Physics validation on a regular grid at time t.
+
+        Modes
+        -----
+        'fd_xy_ad_t'  : finite differences in x,y + autodiff in t (transient-consistent).
+        'steady_fd'   : your previous steady snapshot check (no time terms).
+        'autodiff_all': full autodiff in x,y,t (most accurate, most memory).
+
+        Notes
+        -----
+        - Mechanics residual uses   -alpha * grad(p)   (matches training loss).
+        - Flow residual uses        p_t / M + alpha * d/dt(div u) - (k/mu) * lap(p).
+        - Uses chunked vmap over t-derivatives to avoid OOM.
         """
+
         if self.all_params is None:
             raise ValueError("Model not trained yet")
 
+        if method not in ('fd_xy_ad_t','steady_fd','autodiff_all'):
+            raise ValueError("method must be one of {'fd_xy_ad_t','steady_fd','autodiff_all'}")
+
         print(f"Physics Validation Metrics (using {method})")
 
-        # Create evaluation grid in the spatial domain.  We evaluate at a
-        # single time t=1.0 by default.  Finite difference avoids the
-        # boundaries to reduce stencil errors.
-        if method == 'finite_diff':
-            # Avoid boundaries for finite difference method to reduce edge effects
+        # Grid (avoid edges for FD stencils)
+        if method in ('fd_xy_ad_t','steady_fd'):
             x = jnp.linspace(0.1, 0.9, n_points)
             y = jnp.linspace(0.1, 0.9, n_points)
         else:
-            # Full domain for autodiff method
-            x = jnp.linspace(0, 1, n_points)
-            y = jnp.linspace(0, 1, n_points)
+            x = jnp.linspace(0.0, 1.0, n_points)
+            y = jnp.linspace(0.0, 1.0, n_points)
 
         X, Y = jnp.meshgrid(x, y)
-        # Append a column of t=1.0 to evaluate at the final time
-        XYT = jnp.column_stack([X.flatten(), Y.flatten(), jnp.ones((n_points * n_points,))])
+        XYT = jnp.column_stack([X.flatten(), Y.flatten(), jnp.full((n_points*n_points,), float(t))])
 
-        # Material parameters and scaling factors
-        prob = self.all_params["static"]["problem"]
-        G = prob["G"]
-        lam = prob["lam"]
-        alpha = prob["alpha"]
-        k = prob["k"]
-        mu = prob["mu"]
-        E = prob["E"]
+        # Params and scales
+        prob  = self.all_params["static"]["problem"]
+        G     = prob["G"]; lam = prob["lam"]; alpha = prob["alpha"]
+        k     = prob["k"]; mu  = prob["mu"];  E     = prob["E"]; M = prob.get("M", 1.0)
 
-        # Predict solution at grid points
-        u_pred = self.predict(XYT)
-        ux = u_pred[:, 0]
-        uy = u_pred[:, 1]
-        p = u_pred[:, 2]
+        pred  = self.predict(XYT)
+        ux    = pred[:,0]; uy = pred[:,1]; p = pred[:,2]
 
-        # Characteristic scales for normalising residuals
-        L = 1.0  # Domain size
-        p_scale = 1.0  
+        L = 1.0; p_scale = 1.0
         u_scale = jnp.maximum(jnp.max(jnp.abs(ux)), jnp.max(jnp.abs(uy)))
-        if u_scale < 1e-10:
-            u_scale = p_scale * L / E  
-        elastic_force_scale = E * u_scale / L**2
-        pressure_gradient_scale = (k / mu) * p_scale / L**2
+        u_scale = jnp.where(u_scale < 1e-10, p_scale * L / E, u_scale)
 
-        if method == 'autodiff':
-            # Helper to compute derivatives via autodiff
-            def comp_component(idx):
-                def f(xy):
-                    return self.predict(xy.reshape(1, -1))[0, idx]
+        mech_scale  = jnp.maximum(E * u_scale / L**2, 1e-8)
+        darcy_scale = jnp.maximum((k/mu) * p_scale / L**2, 1e-10)
+
+        # Helpers for FD in space
+        dx = x[1]-x[0] if n_points>1 else 1.0
+        dy = y[1]-y[0] if n_points>1 else 1.0
+        ux_grid = ux.reshape(n_points, n_points)
+        uy_grid = uy.reshape(n_points, n_points)
+        p_grid  = p.reshape(n_points, n_points)
+
+        def fd_grad_x(arr): return jnp.gradient(arr, dx, axis=1)
+        def fd_grad_y(arr): return jnp.gradient(arr, dy, axis=0)
+        def fd_lap(arr):
+            return jnp.gradient(jnp.gradient(arr, dx, axis=1), dx, axis=1) + \
+                  jnp.gradient(jnp.gradient(arr, dy, axis=0), dy, axis=0)
+
+        # Spatial derivatives (FD)
+        dux_dx  = fd_grad_x(ux_grid).flatten()
+        dux_dy  = fd_grad_y(ux_grid).flatten()
+        duy_dx  = fd_grad_x(uy_grid).flatten()
+        duy_dy  = fd_grad_y(uy_grid).flatten()
+        d2ux_dx2  = jnp.gradient(fd_grad_x(ux_grid), dx, axis=1).flatten()
+        d2ux_dy2  = jnp.gradient(fd_grad_y(ux_grid), dy, axis=0).flatten()
+        d2ux_dxdy = jnp.gradient(fd_grad_x(ux_grid), dy, axis=0).flatten()
+        d2uy_dx2  = jnp.gradient(fd_grad_x(uy_grid), dx, axis=1).flatten()
+        d2uy_dy2  = jnp.gradient(fd_grad_y(uy_grid), dy, axis=0).flatten()
+        d2uy_dxdy = jnp.gradient(fd_grad_x(uy_grid), dy, axis=0).flatten()
+        dp_dx     = fd_grad_x(p_grid).flatten()
+        dp_dy     = fd_grad_y(p_grid).flatten()
+        lap_p     = fd_lap(p_grid).flatten()
+        div_u     = (dux_dx + duy_dy)
+
+        if method == 'steady_fd':
+            # Steady snapshot (no time terms)
+            equilibrium_x = ((2*G + lam)*d2ux_dx2 + lam*d2uy_dxdy + G*d2ux_dy2 + G*d2uy_dxdy - alpha*dp_dx)
+            equilibrium_y = (G*d2ux_dxdy + G*d2uy_dx2 + lam*d2ux_dxdy + (2*G + lam)*d2uy_dy2 - alpha*dp_dy)
+            flow_residual = -(k/mu) * lap_p
+            flow_scale = darcy_scale
+
+        elif method == 'autodiff_all':
+            # Full autodiff in x,y,t (costly)
+            def comp(idx):
+                def f(xyt): return self.predict(xyt.reshape(1,-1))[0, idx]
                 return f
+            # First space derivs
+            d_ux_dx = jax.vmap(jax.grad(comp(0), argnums=0))(XYT)
+            d_uy_dy = jax.vmap(jax.grad(comp(1), argnums=1))(XYT)
+            dp_dx   = jax.vmap(jax.grad(comp(2), argnums=0))(XYT)
+            dp_dy   = jax.vmap(jax.grad(comp(2), argnums=1))(XYT)
+            # Second space derivs
+            d2_ux_dx2 = jax.vmap(jax.grad(jax.grad(comp(0), argnums=0), argnums=0))(XYT)
+            d2_ux_dy2 = jax.vmap(jax.grad(jax.grad(comp(0), argnums=1), argnums=1))(XYT)
+            d2_ux_dxdy= jax.vmap(jax.grad(jax.grad(comp(0), argnums=0), argnums=1))(XYT)
+            d2_uy_dx2 = jax.vmap(jax.grad(jax.grad(comp(1), argnums=0), argnums=0))(XYT)
+            d2_uy_dy2 = jax.vmap(jax.grad(jax.grad(comp(1), argnums=1), argnums=1))(XYT)
+            d2_uy_dxdy= jax.vmap(jax.grad(jax.grad(comp(1), argnums=0), argnums=1))(XYT)
+            d2_p_dx2  = jax.vmap(jax.grad(jax.grad(comp(2), argnums=0), argnums=0))(XYT)
+            d2_p_dy2  = jax.vmap(jax.grad(jax.grad(comp(2), argnums=1), argnums=1))(XYT)
+            # Time derivatives
+            p_t      = jax.vmap(jax.grad(comp(2), argnums=2))(XYT)
+            ux_t     = jax.vmap(jax.grad(comp(0), argnums=2))(XYT)
+            uy_t     = jax.vmap(jax.grad(comp(1), argnums=2))(XYT)
+            # div u_t
+            dux_dx_t = jax.vmap(jax.grad(lambda xyt: jax.grad(comp(0), argnums=2)(xyt), argnums=0))(XYT)
+            duy_dy_t = jax.vmap(jax.grad(lambda xyt: jax.grad(comp(1), argnums=2)(xyt), argnums=1))(XYT)
+            equilibrium_x = ((2*G + lam)*d2_ux_dx2 + lam*d2_uy_dxdy + G*d2_ux_dy2 + G*d2_uy_dxdy - alpha*dp_dx)
+            equilibrium_y = (G*d2_ux_dxdy + G*d2_uy_dx2 + lam*d2_ux_dxdy + (2*G + lam)*d2_uy_dy2 - alpha*dp_dy)
+            lap_p         = d2_p_dx2 + d2_p_dy2
+            flow_residual = (p_t / M) + alpha*(dux_dx_t + duy_dy_t) - (k/mu)*lap_p
+            # flow scale: combine the three contributions
+            Tchar = 1.0
+            s_pt   = p_scale / (M*Tchar + 1e-12)
+            s_comp = alpha * (u_scale / (L*Tchar + 1e-12))
+            flow_scale = jnp.sqrt(darcy_scale**2 + s_pt**2 + s_comp**2)
 
-            # Derivative functions
-            d_ux_dx = jax.vmap(jax.grad(comp_component(0), argnums=0))(XYT)
-            d_ux_dy = jax.vmap(jax.grad(comp_component(0), argnums=1))(XYT)
-            d2_ux_dx2 = jax.vmap(jax.grad(jax.grad(comp_component(0), argnums=0), argnums=0))(XYT)
-            d2_ux_dy2 = jax.vmap(jax.grad(jax.grad(comp_component(0), argnums=1), argnums=1))(XYT)
-            d2_ux_dxdy = jax.vmap(jax.grad(jax.grad(comp_component(0), argnums=0), argnums=1))(XYT)
+        else:  # 'fd_xy_ad_t'  (recommended)
+            # Autodiff in t, FD in x,y. Chunked to save memory.
+            def comp_t(idx):
+                def f(xyt): return self.predict(xyt.reshape(1,-1))[0, idx]
+                return jax.grad(f, argnums=2)
 
-            d_uy_dx = jax.vmap(jax.grad(comp_component(1), argnums=0))(XYT)
-            d_uy_dy = jax.vmap(jax.grad(comp_component(1), argnums=1))(XYT)
-            d2_uy_dx2 = jax.vmap(jax.grad(jax.grad(comp_component(1), argnums=0), argnums=0))(XYT)
-            d2_uy_dy2 = jax.vmap(jax.grad(jax.grad(comp_component(1), argnums=1), argnums=1))(XYT)
-            d2_uy_dxdy = jax.vmap(jax.grad(jax.grad(comp_component(1), argnums=0), argnums=1))(XYT)
+            def vmap_chunks(fn, arr, chunk):
+                outs = []
+                N = arr.shape[0]
+                for i in range(0, N, chunk):
+                    outs.append(jax.vmap(fn)(arr[i:i+chunk]))
+                return jnp.concatenate(outs, axis=0)
 
-            d_p_dx = jax.vmap(jax.grad(comp_component(2), argnums=0))(XYT)
-            d_p_dy = jax.vmap(jax.grad(comp_component(2), argnums=1))(XYT)
-            d2_p_dx2 = jax.vmap(jax.grad(jax.grad(comp_component(2), argnums=0), argnums=0))(XYT)
-            d2_p_dy2 = jax.vmap(jax.grad(jax.grad(comp_component(2), argnums=1), argnums=1))(XYT)
+            p_t  = vmap_chunks(comp_t(2), XYT, chunk)
+            ux_t = vmap_chunks(comp_t(0), XYT, chunk).reshape(n_points, n_points)
+            uy_t = vmap_chunks(comp_t(1), XYT, chunk).reshape(n_points, n_points)
 
-            # Assume time derivatives vanish at validation time (steady snapshot)
-            # Mechanics residuals with correct sign on coupling term
-            div_u = d_ux_dx + d_uy_dy
-            equilibrium_x = ((2 * G + lam) * d2_ux_dx2 + lam * d2_uy_dxdy + G * d2_ux_dy2 + G * d2_uy_dxdy - alpha * d_p_dx)
-            equilibrium_y = (G * d2_ux_dxdy + G * d2_uy_dx2 + lam * d2_ux_dxdy + (2 * G + lam) * d2_uy_dy2 - alpha * d_p_dy)
-            laplacian_p = d2_p_dx2 + d2_p_dy2
-            flow_residual = -(k / mu) * laplacian_p
+            dux_dx_t = fd_grad_x(ux_t).flatten()
+            duy_dy_t = fd_grad_y(uy_t).flatten()
 
-        else:
-            # Finite difference evaluation
-            dx = x[1] - x[0]
-            dy = y[1] - y[0]
-            ux_grid = ux.reshape(n_points, n_points)
-            uy_grid = uy.reshape(n_points, n_points)
-            p_grid = p.reshape(n_points, n_points)
+            equilibrium_x = ((2*G + lam)*d2ux_dx2 + lam*d2uy_dxdy + G*d2ux_dy2 + G*d2uy_dxdy - alpha*dp_dx)
+            equilibrium_y = (G*d2ux_dxdy + G*d2uy_dx2 + lam*d2ux_dxdy + (2*G + lam)*d2uy_dy2 - alpha*dp_dy)
+            flow_residual = (p_t / M) + alpha*(dux_dx_t + duy_dy_t) - (k/mu)*lap_p
 
-            dux_dx = jnp.gradient(ux_grid, dx, axis=1).flatten()
-            d_uy_dx = jnp.gradient(uy_grid, dx, axis=1).flatten()
-            dux_dy = jnp.gradient(ux_grid, dy, axis=0).flatten()
-            d_uy_dy = jnp.gradient(uy_grid, dy, axis=0).flatten()
+            Tchar = 1.0
+            s_pt   = p_scale / (M*Tchar + 1e-12)
+            s_comp = alpha * (u_scale / (L*Tchar + 1e-12))
+            flow_scale = jnp.sqrt(darcy_scale**2 + s_pt**2 + s_comp**2)
 
-            d2_ux_dx2 = jnp.gradient(jnp.gradient(ux_grid, dx, axis=1), dx, axis=1).flatten()
-            d2_uy_dx2 = jnp.gradient(jnp.gradient(uy_grid, dx, axis=1), dx, axis=1).flatten()
-            d2_ux_dy2 = jnp.gradient(jnp.gradient(ux_grid, dy, axis=0), dy, axis=0).flatten()
-            d2_uy_dy2 = jnp.gradient(jnp.gradient(uy_grid, dy, axis=0), dy, axis=0).flatten()
-            d2_ux_dxdy = jnp.gradient(jnp.gradient(ux_grid, dx, axis=1), dy, axis=0).flatten()
-            d2_uy_dxdy = jnp.gradient(jnp.gradient(uy_grid, dx, axis=1), dy, axis=0).flatten()
+        # Metrics 
+        mech_x_rms = jnp.sqrt(jnp.mean(equilibrium_x**2))
+        mech_y_rms = jnp.sqrt(jnp.mean(equilibrium_y**2))
+        mech_rms   = jnp.sqrt(0.5*(mech_x_rms**2 + mech_y_rms**2))
+        flow_rms   = jnp.sqrt(jnp.mean(flow_residual**2))
 
-            d_p_dx = jnp.gradient(p_grid, dx, axis=1).flatten()
-            d_p_dy = jnp.gradient(p_grid, dy, axis=0).flatten()
-            d2_p_dx2 = jnp.gradient(jnp.gradient(p_grid, dx, axis=1), dx, axis=1).flatten()
-            d2_p_dy2 = jnp.gradient(jnp.gradient(p_grid, dy, axis=0), dy, axis=0).flatten()
+        mech_x_linf = jnp.max(jnp.abs(equilibrium_x))
+        mech_y_linf = jnp.max(jnp.abs(equilibrium_y))
+        mech_linf   = jnp.maximum(mech_x_linf, mech_y_linf)
+        flow_linf   = jnp.max(jnp.abs(flow_residual))
 
-            div_u = dux_dx + d_uy_dy
-            equilibrium_x = ((2 * G + lam) * d2_ux_dx2 + lam * d2_uy_dxdy + G * d2_ux_dy2 + G * d2_uy_dxdy - alpha * d_p_dx)
-            equilibrium_y = (G * d2_ux_dxdy + G * d2_uy_dx2 + lam * d2_ux_dxdy + (2 * G + lam) * d2_uy_dy2 - alpha * d_p_dy)
-            laplacian_p = d2_p_dx2 + d2_p_dy2
-            flow_residual = -(k / mu) * laplacian_p
+        mech_x_rel = mech_x_rms / mech_scale
+        mech_y_rel = mech_y_rms / mech_scale
+        mech_rel   = mech_rms / mech_scale
+        flow_rel   = flow_rms / jnp.maximum(flow_scale, 1e-12)
+        total_rel  = 0.5*(mech_rel + flow_rel)
 
-         # RMS and L-inf norms
-        mechanics_x_rms = jnp.sqrt(jnp.mean(equilibrium_x ** 2))
-        mechanics_y_rms = jnp.sqrt(jnp.mean(equilibrium_y ** 2))
-        mechanics_rms = jnp.sqrt(0.5 * (mechanics_x_rms ** 2 + mechanics_y_rms ** 2))
-        flow_rms = jnp.sqrt(jnp.mean(flow_residual ** 2))
-
-        mechanics_x_linf = jnp.max(jnp.abs(equilibrium_x))
-        mechanics_y_linf = jnp.max(jnp.abs(equilibrium_y))
-        mechanics_linf = jnp.maximum(mechanics_x_linf, mechanics_y_linf)
-        flow_linf = jnp.max(jnp.abs(flow_residual))
-
-        mechanics_x_l2 = jnp.sqrt(jnp.sum(equilibrium_x ** 2))
-        mechanics_y_l2 = jnp.sqrt(jnp.sum(equilibrium_y ** 2))
-        mechanics_l2 = jnp.sqrt(mechanics_x_l2 ** 2 + mechanics_y_l2 ** 2)
-        flow_l2 = jnp.sqrt(jnp.sum(flow_residual ** 2))
-
-        # Relative errors
-        mechanics_x_rel = mechanics_x_rms / elastic_force_scale
-        mechanics_y_rel = mechanics_y_rms / elastic_force_scale
-        mechanics_rel = mechanics_rms / elastic_force_scale
-        flow_rel = flow_rms / pressure_gradient_scale
-        total_rel = 0.5 * (mechanics_rel + flow_rel)
-
-        if total_rel < 1e-3:
-            status = "EXCELLENT"
-        elif total_rel < 1e-2:
-            status = "VERY GOOD"
-        elif total_rel < 5e-2:
-            status = "GOOD"
-        elif total_rel < 1e-1:
-            status = "ACCEPTABLE"
-        else:
-            status = "NEEDS IMPROVEMENT"
+        status = ("EXCELLENT" if total_rel < 1e-3 else
+                  "VERY GOOD" if total_rel < 1e-2 else
+                  "GOOD"      if total_rel < 5e-2 else
+                  "ACCEPTABLE"if total_rel < 1e-1 else
+                  "NEEDS IMPROVEMENT")
 
         print("\n┌─────────────────┬──────────────┬──────────────┬──────────────┐")
         print("  │ Equation        │ RMS Absolute │ RMS Relative │ L-inf Norm   │")
         print("  ├─────────────────┼──────────────┼──────────────┼──────────────┤")
-        print(f" │ Mechanics (x)   │ {mechanics_x_rms:.2e} │ {mechanics_x_rel:.2e} │ {mechanics_x_linf:.2e} │")
-        print(f" │ Mechanics (y)   │ {mechanics_y_rms:.2e} │ {mechanics_y_rel:.2e} │ {mechanics_y_linf:.2e} │")
-        print(f" │ Mechanics (avg) │ {mechanics_rms:.2e} │ {mechanics_rel:.2e} │ {mechanics_linf:.2e} │")
+        print(f" │ Mechanics (x)   │ {mech_x_rms:.2e} │ {mech_x_rel:.2e} │ {mech_x_linf:.2e} │")
+        print(f" │ Mechanics (y)   │ {mech_y_rms:.2e} │ {mech_y_rel:.2e} │ {mech_y_linf:.2e} │")
+        print(f" │ Mechanics (avg) │ {mech_rms:.2e} │ {mech_rel:.2e} │ {mech_linf:.2e} │")
         print(f" │ Flow            │ {flow_rms:.2e} │ {flow_rel:.2e} │ {flow_linf:.2e} │")
         print("  └─────────────────┴──────────────┴──────────────┴──────────────┘")
-
         print(f"\nCharacteristic Scales:")
         print(f"  Domain size (L): {L:.2f}")
         print(f"  Pressure scale: {p_scale:.2f}")
         print(f"  Displacement scale: {u_scale:.2e}")
-        print(f"  Elastic force scale: {elastic_force_scale:.2e}")
-        print(f"  Pressure gradient scale: {pressure_gradient_scale:.2e}")
-
+        print(f"  Elastic force scale: {mech_scale:.2e}")
+        print(f"  Flow scale (combined): {flow_scale:.2e}")
         print(f"\nOverall physics satisfaction: {status} (avg relative error: {total_rel:.2e})")
 
-        print("\nPhysics Conservation Check:")
-        print(f"  Mass conservation (avg residual): {flow_rms:.2e}")
-        print(f"  Momentum conservation (avg residual): {mechanics_rms:.2e}")
-
-        # Store residuals for plotting if finite diff is used
-        if method == 'finite_diff':
+        if method in ('fd_xy_ad_t','steady_fd'):
             self.last_residuals = {
-                'x': X,
-                'y': Y,
+                'x': X, 'y': Y,
                 'mechanics_x': equilibrium_x.reshape(n_points, n_points),
                 'mechanics_y': equilibrium_y.reshape(n_points, n_points),
                 'flow': flow_residual.reshape(n_points, n_points),
                 'div_u': div_u.reshape(n_points, n_points)
             }
-        elif hasattr(self, 'last_residuals'):
-            print("\nNote: Residual spatial data is not updated when using autodiff method.")
-            print("Previous spatial data will be used if plotting residual distribution.")
 
-        print("=" * 60)
+        print("="*60)
 
         return {
-            'mechanics_x_rms': float(mechanics_x_rms),
-            'mechanics_y_rms': float(mechanics_y_rms),
-            'mechanics_rms': float(mechanics_rms),
-            'flow_rms': float(flow_rms),
-            'mechanics_x_l2': float(mechanics_x_l2),
-            'mechanics_y_l2': float(mechanics_y_l2),
-            'mechanics_l2': float(mechanics_l2),
-            'flow_l2': float(flow_l2),
-            'mechanics_x_linf': float(mechanics_x_linf),
-            'mechanics_y_linf': float(mechanics_y_linf),
-            'mechanics_linf': float(mechanics_linf),
-            'flow_linf': float(flow_linf),
-            'mechanics_x_rel': float(mechanics_x_rel),
-            'mechanics_y_rel': float(mechanics_y_rel),
-            'mechanics_rel': float(mechanics_rel),
-            'flow_rel': float(flow_rel),
-            'total_rel': float(total_rel),
-            'status': status,
-            'u_scale': float(u_scale),
-            'p_scale': float(p_scale),
-            'method': method
+            'mechanics_x_rms': float(mech_x_rms),
+            'mechanics_y_rms': float(mech_y_rms),
+            'mechanics_rms'  : float(mech_rms),
+            'flow_rms'       : float(flow_rms),
+            'mechanics_x_linf': float(mech_x_linf),
+            'mechanics_y_linf': float(mech_y_linf),
+            'mechanics_linf'  : float(mech_linf),
+            'flow_linf'       : float(flow_linf),
+            'mechanics_x_rel' : float(mech_x_rel),
+            'mechanics_y_rel' : float(mech_y_rel),
+            'mechanics_rel'   : float(mech_rel),
+            'flow_rel'        : float(flow_rel),
+            'total_rel'       : float(total_rel),
+            'status'          : status,
+            'u_scale'         : float(u_scale),
+            'p_scale'         : float(p_scale),
+            'method'          : method
         }
 
     def check_bc_satisfaction(self):
@@ -750,7 +765,7 @@ class BiotCoupledTrainer:
         return fig, axes
 
 
-    def track_convergence_history(self, checkpoint_steps=[100, 500, 1000, 1500, 2000],
+    def track_convergence_history(self, checkpoint_steps= [200, 1000, 2000, 4000, 6000, 8000],
                                 save_checkpoints=True, checkpoint_dir="checkpoints"):
         """
         Track how physics satisfaction improves during training.
@@ -793,7 +808,7 @@ class BiotCoupledTrainer:
                 previous_steps = step
 
             # Compute metrics using finite differences for spatial plotting
-            metrics = self.compute_physics_metrics(n_points=30, method='finite_diff')
+            metrics = self.compute_physics_metrics(n_points=30, method='fd_xy_ad_t')
 
             # Check BC violations
             bc_metrics = self.check_bc_satisfaction()
@@ -890,7 +905,7 @@ class BiotCoupledTrainer:
         Can be called before or after training.
 
         Args:
-          save_path: Optional path to save the figure 
+          save_path: Optional path to save the figure
 
         Returns:
           fig, axes: Matplotlib figure and axes objects
