@@ -40,6 +40,7 @@ from fbpinns.decompositions import RectangularDecompositionND
 from fbpinns.networks import FCN
 from fbpinns.constants import Constants
 from fbpinns.trainers import FBPINNTrainer, get_inputs, FBPINN_model_jit
+from poroelasticity.trainers.base_model import BiotCoupledTrainer as BaseBiotTrainer
 
 
 class BiotCoupled2D_Heterogeneous(Problem):
@@ -304,7 +305,7 @@ class BiotCoupled2D_Heterogeneous(Problem):
         return None
 
 
-class BiotCoupledTrainer_Heterogeneous:
+class BiotCoupledTrainer_Heterogeneous(BaseBiotTrainer):
     """
     Trainer for the heterogeneous Biot problem.  This class mirrors
     `BiotCoupledTrainer` but uses `BiotCoupled2D_Heterogeneous` as the
