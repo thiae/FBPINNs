@@ -469,11 +469,21 @@ class BiotCoupledTrainer_Heterogeneous:
 
         # heterogeneous k and its gradients (two-argument function for correct argnums)
         xs, ys = XYT[:,0], XYT[:,1]
-        k_val  = k_fun(xs, ys)
         def k_fun_xy(x_, y_):
             return k_fun(x_, y_)
-        dk_dx = jax.vmap(jax.grad(k_fun_xy, argnums=0))(xs, ys)
-        dk_dy = jax.vmap(jax.grad(k_fun_xy, argnums=1))(xs, ys)
+
+        # Chunked evaluation to reduce peak memory
+        N = XYT.shape[0]
+        def chunked_eval(f, xs_, ys_, chunk_):
+            outs = []
+            for i0 in range(0, xs_.shape[0], chunk_):
+                i1 = i0 + chunk_
+                outs.append(f(xs_[i0:i1], ys_[i0:i1]))
+            return jnp.concatenate(outs, axis=0)
+
+        k_val = chunked_eval(lambda a,b: k_fun(a,b), xs, ys, chunk)
+        dk_dx = chunked_eval(lambda a,b: jax.vmap(jax.grad(k_fun_xy, argnums=0))(a,b), xs, ys, chunk)
+        dk_dy = chunked_eval(lambda a,b: jax.vmap(jax.grad(k_fun_xy, argnums=1))(a,b), xs, ys, chunk)
 
         # time derivatives
         if method == 'fd_xy_ad_t':
@@ -489,8 +499,14 @@ class BiotCoupledTrainer_Heterogeneous:
                                       self.config.problem.constraining_fn)
                 u, *_ = FBPINN_model_jit(all_params_cut, xyt_batch, takes, (nf, nn, uf, wf, cf), verbose=False)
                 return u
-            V = jnp.zeros_like(XYT).at[:,2].set(1.0)
-            _, dudt = jax.jvp(predict_batch, (XYT,), (V,))
+            # Chunked JVP in time to keep memory bounded
+            Vs = jnp.zeros_like(XYT).at[:,2].set(1.0)
+            dudt_parts = []
+            for i0 in range(0, N, chunk):
+                i1 = i0 + chunk
+                _, dudt_part = jax.jvp(predict_batch, (XYT[i0:i1],), (Vs[i0:i1],))
+                dudt_parts.append(dudt_part)
+            dudt = jnp.concatenate(dudt_parts, axis=0)
             p_t  = dudt[:,2]
             dux_dx_t = fd_grad_x(dudt[:,0].reshape(n_points, n_points)).flatten()
             duydy_t  = fd_grad_y(dudt[:,1].reshape(n_points, n_points)).flatten()
