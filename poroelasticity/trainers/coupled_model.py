@@ -40,7 +40,6 @@ from fbpinns.decompositions import RectangularDecompositionND
 from fbpinns.networks import FCN
 from fbpinns.constants import Constants
 from fbpinns.trainers import FBPINNTrainer, get_inputs, FBPINN_model_jit
-from poroelasticity.trainers.base_model import BiotCoupledTrainer as BaseBiotTrainer
 
 
 class BiotCoupled2D_Heterogeneous(Problem):
@@ -84,15 +83,14 @@ class BiotCoupled2D_Heterogeneous(Problem):
         return k_caprock + (k_reservoir - k_caprock) * (1.0 - w)
 
     @staticmethod
-    def default_E_fun(x, y):
-        """Default Young's modulus profile: uniform (homogeneous).
+    def default_E_fun(x, y, E_res=5000.0, E_cap=7000.0, interface_y=0.3, sharpness=40.0):
+        """Default Young's modulus: piecewise (reservoir vs caprock) with smooth transition.
 
-        Users can override this method to supply a spatially varying
-        stiffness profile.  The returned values should be positive and
-        represent nondimensional moduli when working in nondimensional
-        units.
+        Caprock (above interface) stiffer than reservoir (below). Smooth tanh transition keeps
+        autodiff stable.
         """
-        return jnp.ones_like(x)
+        w = 0.5 * (1.0 + jnp.tanh(sharpness * (interface_y - y)))  # ~1 caprock, ~0 reservoir
+        return E_cap * w + E_res * (1.0 - w)
 
     @staticmethod
     def init_params(E=5000.0, nu=0.25, alpha=0.8, k=1.0, mu=1.0, M=100.0,
@@ -130,7 +128,8 @@ class BiotCoupled2D_Heterogeneous(Problem):
             # wrap constant k into a function
             k_fun = lambda x, y, k_val=k: jnp.broadcast_to(k_val, x.shape)
         if E_fun is None:
-            E_fun = lambda x, y, E_val=E: jnp.broadcast_to(E_val, x.shape)
+            # Default to piecewise E (reservoir vs caprock) with smooth interface
+            E_fun = BiotCoupled2D_Heterogeneous.default_E_fun
 
         # Derive uniform stiffness parameters for scaling; local values
         # will be computed in the loss when heterogeneity is active.
@@ -265,14 +264,12 @@ class BiotCoupled2D_Heterogeneous(Problem):
             return k_fun(z[0], z[1])
         dk_dx = jax.vmap(jax.grad(k_scalar, argnums=0))(jnp.stack([x, y], axis=1))
         dk_dy = jax.vmap(jax.grad(k_scalar, argnums=1))(jnp.stack([x, y], axis=1))
-        # Compute local elastic constants if E_fun is provided
-        if E_fun is not None:
-            E_local = E_fun(x, y)
-            G_local = E_local / (2.0 * (1.0 + nu))
-            lam_local = E_local * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-        else:
-            G_local = prob["G"]
-            lam_local = prob["lam"]
+        # Compute local elastic constants from E_fun (required for heterogeneous mechanics)
+        if E_fun is None:
+            raise ValueError("E_fun must be provided or left as default piecewise E")
+        E_local = E_fun(x, y)
+        G_local = E_local / (2.0 * (1.0 + nu))
+        lam_local = E_local * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
         # Mechanics residuals
         equilibrium_x = (
             (2 * G_local + lam_local) * d2uxdx2
@@ -305,13 +302,14 @@ class BiotCoupled2D_Heterogeneous(Problem):
         return None
 
 
-class BiotCoupledTrainer_Heterogeneous(BaseBiotTrainer):
+class BiotCoupledTrainer_Heterogeneous:
     """
     Trainer for the heterogeneous Biot problem.  This class mirrors
     `BiotCoupledTrainer` but uses `BiotCoupled2D_Heterogeneous` as the
     problem.  It accepts optional permeability and modulus functions to
     customise the heterogeneity.
     """
+
     def __init__(self, k_fun=None, E_fun=None, n_steps=8000):
         # Configure domain and problem
         problem_init_kwargs = {
@@ -425,12 +423,203 @@ class BiotCoupledTrainer_Heterogeneous(BaseBiotTrainer):
             print(f"\nStatus: CHECK - Max violation: {max_violation:.3e}")
         return max_violation < 1e-2
 
-    # The metrics, plotting and history tracking methods could reuse the
-    # implementations from the homogeneous trainer via inheritance or
-    # delegation.  For brevity they are omitted here; the user can
-    # directly call `compute_physics_metrics`, `plot_solution`, etc. on
-    # this trainer since it inherits the methods from the homogeneous
-    # version by composition of the FBPINN trainer.
+    def compute_physics_metrics(self, n_points=50, method='fd_xy_ad_t', t=1.0, chunk=4096):
+        """Physics metrics for heterogeneous k using div(q) with JAX-safe time derivs."""
+        if self.all_params is None:
+            raise ValueError("Model not trained yet")
+        if method not in ('fd_xy_ad_t','steady_fd'):
+            raise ValueError("method must be one of {'fd_xy_ad_t','steady_fd'} for heterogeneous validation")
+
+        # grid (avoid edges for FD)
+        x = jnp.linspace(0.1, 0.9, n_points)
+        y = jnp.linspace(0.1, 0.9, n_points)
+        X, Y = jnp.meshgrid(x, y)
+        XYT = jnp.column_stack([X.flatten(), Y.flatten(), jnp.full((n_points*n_points,), float(t))])
+
+        prob  = self.all_params["static"]["problem"]
+        E0, mu, M, alpha, nu = prob["E"], prob["mu"], prob["M"], prob["alpha"], prob["nu"]
+        k_fun = prob.get("k_fun")
+        E_fun = prob.get("E_fun")
+
+        pred = self.predict(XYT)
+        ux, uy, p = pred[:,0], pred[:,1], pred[:,2]
+
+        # FD helpers
+        dx, dy = x[1]-x[0], y[1]-y[0]
+        def fd_grad_x(arr): return jnp.gradient(arr, dx, axis=1)
+        def fd_grad_y(arr): return jnp.gradient(arr, dy, axis=0)
+        def fd_lap(arr):
+            return jnp.gradient(jnp.gradient(arr, dx, axis=1), dx, axis=1) + \
+                   jnp.gradient(jnp.gradient(arr, dy, axis=0), dy, axis=0)
+
+        ux_g = ux.reshape(n_points, n_points)
+        uy_g = uy.reshape(n_points, n_points)
+        p_g  = p.reshape(n_points, n_points)
+
+        dux_dx  = fd_grad_x(ux_g).flatten()
+        duydy   = fd_grad_y(uy_g).flatten()
+        d2ux_dx2  = jnp.gradient(fd_grad_x(ux_g), dx, axis=1).flatten()
+        d2ux_dy2  = jnp.gradient(fd_grad_y(ux_g), dy, axis=0).flatten()
+        d2ux_dxdy = jnp.gradient(fd_grad_x(ux_g), dy, axis=0).flatten()
+        d2uy_dx2  = jnp.gradient(fd_grad_x(uy_g), dx, axis=1).flatten()
+        d2uy_dy2  = jnp.gradient(fd_grad_y(uy_g), dy, axis=0).flatten()
+        d2uy_dxdy = jnp.gradient(fd_grad_x(uy_g), dy, axis=0).flatten()
+        dp_dx     = fd_grad_x(p_g).flatten()
+        dp_dy     = fd_grad_y(p_g).flatten()
+        lap_p     = fd_lap(p_g).flatten()
+
+        # heterogeneous k and its gradients
+        xs, ys = XYT[:,0], XYT[:,1]
+        k_val  = k_fun(xs, ys)
+        def k_scalar(z): return k_fun(z[0], z[1])
+        dk_dx = jax.vmap(jax.grad(k_scalar, argnums=0))(jnp.stack([xs, ys], axis=1))
+        dk_dy = jax.vmap(jax.grad(k_scalar, argnums=1))(jnp.stack([xs, ys], axis=1))
+
+        # time derivatives
+        if method == 'fd_xy_ad_t':
+            active_all = jnp.ones(self.all_params["static"]["decomposition"]["m"], dtype=jnp.int32)
+            takes, _, (_, _, _, cut_all, _)  = get_inputs(XYT, active_all, self.all_params, self.config.decomposition)
+            def predict_batch(xyt_batch):
+                all_params_cut = {"static": cut_all(self.all_params["static"]),
+                                  "trainable": cut_all(self.all_params["trainable"])}
+                nf, nn, uf, wf, cf = (self.config.decomposition.norm_fn,
+                                      self.config.network.network_fn,
+                                      self.config.decomposition.unnorm_fn,
+                                      self.config.decomposition.window_fn,
+                                      self.config.problem.constraining_fn)
+                u, *_ = FBPINN_model_jit(all_params_cut, xyt_batch, takes, (nf, nn, uf, wf, cf), verbose=False)
+                return u
+            V = jnp.zeros_like(XYT).at[:,2].set(1.0)
+            _, dudt = jax.jvp(predict_batch, (XYT,), (V,))
+            p_t  = dudt[:,2]
+            dux_dx_t = fd_grad_x(dudt[:,0].reshape(n_points, n_points)).flatten()
+            duydy_t  = fd_grad_y(dudt[:,1].reshape(n_points, n_points)).flatten()
+        else:
+            p_t = jnp.zeros_like(p)
+            dux_dx_t = jnp.zeros_like(p)
+            duydy_t  = jnp.zeros_like(p)
+
+        # residuals (mechanics with local elastic constants from E_fun)
+        if E_fun is None:
+            raise ValueError("E_fun must be provided for piecewise heterogeneous elasticity in metrics")
+        E_local = E_fun(XYT[:,0], XYT[:,1])
+        G_local = E_local / (2.0 * (1.0 + nu))
+        lam_local = E_local * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+        equilibrium_x = (
+            (2 * G_local + lam_local) * d2ux_dx2 + lam_local * d2uy_dxdy + G_local * d2ux_dy2 + G_local * d2uy_dxdy - alpha * dp_dx
+        )
+        equilibrium_y = (
+            G_local * d2ux_dxdy + G_local * d2uy_dx2 + lam_local * d2ux_dxdy + (2 * G_local + lam_local) * d2uy_dy2 - alpha * dp_dy
+        )
+        div_q = (k_val * lap_p + dk_dx * dp_dx + dk_dy * dp_dy) / mu
+        flow_residual = (p_t / M) + alpha * (dux_dx_t + duydy_t) - div_q
+
+        # metrics (use local E for mechanics scaling)
+        mech_x_rms = jnp.sqrt(jnp.mean(equilibrium_x**2))
+        mech_y_rms = jnp.sqrt(jnp.mean(equilibrium_y**2))
+        mech_rms   = jnp.sqrt(0.5*(mech_x_rms**2 + mech_y_rms**2))
+        flow_rms   = jnp.sqrt(jnp.mean(flow_residual**2))
+
+        L = 1.0
+        p_scale = 1.0
+        mech_scale_local = jnp.maximum(E_local / (L ** 2), 1e-6)
+        flow_scale = jnp.maximum((jnp.max(k_val)/mu) * (p_scale / (L**2)), 1e-8)
+        mech_x_rel = jnp.sqrt(jnp.mean((equilibrium_x / mech_scale_local)**2))
+        mech_y_rel = jnp.sqrt(jnp.mean((equilibrium_y / mech_scale_local)**2))
+        mech_rel   = jnp.sqrt(0.5*(mech_x_rel**2 + mech_y_rel**2))
+        flow_rel   = flow_rms   / jnp.maximum(flow_scale, 1e-12)
+        total_rel  = 0.5*(mech_rel + flow_rel)
+
+        status = ("EXCELLENT" if total_rel < 1e-3 else
+                  "VERY GOOD" if total_rel < 1e-2 else
+                  "GOOD"      if total_rel < 5e-2 else
+                  "ACCEPTABLE"if total_rel < 1e-1 else
+                  "NEEDS IMPROVEMENT")
+
+        return {
+            'mechanics_x_rms': float(mech_x_rms),
+            'mechanics_y_rms': float(mech_y_rms),
+            'mechanics_rms'  : float(mech_rms),
+            'flow_rms'       : float(flow_rms),
+            'mechanics_x_rel': float(mech_x_rel),
+            'mechanics_y_rel': float(mech_y_rel),
+            'mechanics_rel'  : float(mech_rel),
+            'flow_rel'       : float(flow_rel),
+            'total_rel'      : float(total_rel),
+            'status'         : status,
+            'u_scale'        : float(jnp.maximum(jnp.max(jnp.abs(ux)), jnp.max(jnp.abs(uy)))),
+            'p_scale'        : float(p_scale),
+            'method'         : method
+        }
+
+    def track_convergence_history(self, checkpoint_steps=[200, 1000, 2000, 4000, 6000, 8000],
+                                  save_checkpoints=True, checkpoint_dir="checkpoints"):
+        print("\n" + "="*60)
+        print("CONVERGENCE HISTORY TRACKING (heterogeneous)")
+        print("="*60)
+
+        history = {k: [] for k in ['steps','loss','mechanics_rms','flow_rms','mechanics_rel','flow_rel','total_rel','bc_violation']}
+        if save_checkpoints:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+
+        previous_steps = 0
+        for step in checkpoint_steps:
+            steps_to_train = step - previous_steps
+            if steps_to_train > 0:
+                print(f"\nTraining to step {step}...")
+                self.train(n_steps=steps_to_train)
+                previous_steps = step
+
+            metrics = self.compute_physics_metrics(n_points=30, method='fd_xy_ad_t')
+            bc_metrics = self.verify_bcs(n_points=20, t=1.0)
+
+            history['steps'].append(step)
+            history['mechanics_rms'].append(metrics['mechanics_rms'])
+            history['flow_rms'].append(metrics['flow_rms'])
+            history['mechanics_rel'].append(metrics['mechanics_rel'])
+            history['flow_rel'].append(metrics['flow_rel'])
+            history['total_rel'].append(metrics['total_rel'])
+            history['bc_violation'].append(0.0 if bc_metrics else 1.0)
+
+            current_loss = metrics['mechanics_rms'] + metrics['flow_rms']
+            history['loss'].append(current_loss)
+
+            if save_checkpoints:
+                checkpoint_path = os.path.join(checkpoint_dir, f"model_step_{step}.pkl")
+                self.save_checkpoint(checkpoint_path)
+                print(f"  Checkpoint saved: {checkpoint_path}")
+
+            print(f"\nStep {step} Summary:")
+            print(f"  Relative Errors - Mechanics: {metrics['mechanics_rel']:.2e}, Flow: {metrics['flow_rel']:.2e}")
+            print(f"  Status: {metrics['status']}")
+
+        self.plot_convergence_history(history)
+        print("\n" + "="*60)
+        return history
+
+    def plot_convergence_history(self, history):
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        steps = history['steps']
+        axes[0, 0].semilogy(steps, history['mechanics_rms'], 'b-o', label='Mechanics')
+        axes[0, 0].semilogy(steps, history['flow_rms'], 'r-s', label='Flow')
+        axes[0, 0].set_xlabel('Training Steps'); axes[0, 0].set_ylabel('RMS Residual'); axes[0, 0].set_title('Absolute RMS Errors'); axes[0, 0].legend(); axes[0, 0].grid(True, alpha=0.3)
+        axes[0, 1].semilogy(steps, history['mechanics_rel'], 'b-o', label='Mechanics')
+        axes[0, 1].semilogy(steps, history['flow_rel'], 'r-s', label='Flow')
+        axes[0, 1].semilogy(steps, history['total_rel'], 'g-^', label='Total')
+        axes[0, 1].set_xlabel('Training Steps'); axes[0, 1].set_ylabel('Relative Error'); axes[0, 1].set_title('Relative Errors'); axes[0, 1].legend(); axes[0, 1].grid(True, alpha=0.3)
+        axes[1, 0].semilogy(steps, history['bc_violation'], 'k-d'); axes[1, 0].set_xlabel('Training Steps'); axes[1, 0].set_ylabel('Max BC Violation'); axes[1, 0].set_title('Boundary Condition Satisfaction'); axes[1, 0].grid(True, alpha=0.3)
+        axes[1, 1].semilogy(steps, history['total_rel'], 'g-', linewidth=2, label='Physics Error')
+        axes[1, 1].semilogy(steps, history['bc_violation'], 'k--', linewidth=2, label='BC Violation')
+        axes[1, 1].set_xlabel('Training Steps'); axes[1, 1].set_ylabel('Error'); axes[1, 1].set_title('Overall Convergence'); axes[1, 1].legend(); axes[1, 1].grid(True, alpha=0.3)
+        plt.suptitle('Training Convergence History (heterogeneous)', fontsize=14, fontweight='bold')
+        plt.tight_layout(); plt.show()
+        return fig, axes
+
+    def save_checkpoint(self, filepath):
+        checkpoint = {'all_params': self.all_params, 'config': self.config}
+        with open(filepath, 'wb') as f:
+            pickle.dump(checkpoint, f)
+        print(f"Checkpoint saved to {filepath}")
 
 
 def FixedTrainer():
