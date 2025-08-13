@@ -257,13 +257,12 @@ class BiotCoupled2D_Heterogeneous(Problem):
         div_u = duxdx + duydy
         div_u_t = duxdx_t + duydy_t
         lap_p = d2pdx2 + d2pdy2
-        # Compute local permeability and its gradients
+        # Compute local permeability and its gradients (two-argument wrapper for grad)
         k_val = k_fun(x, y)
-        # If k_fun depends smoothly on x,y, include gradient term
-        def k_scalar(z):
-            return k_fun(z[0], z[1])
-        dk_dx = jax.vmap(jax.grad(k_scalar, argnums=0))(jnp.stack([x, y], axis=1))
-        dk_dy = jax.vmap(jax.grad(k_scalar, argnums=1))(jnp.stack([x, y], axis=1))
+        def k_fun_xy(x_, y_):
+            return k_fun(x_, y_)
+        dk_dx = jax.vmap(jax.grad(k_fun_xy, argnums=0))(x, y)
+        dk_dy = jax.vmap(jax.grad(k_fun_xy, argnums=1))(x, y)
         # Compute local elastic constants from E_fun (required for heterogeneous mechanics)
         if E_fun is None:
             raise ValueError("E_fun must be provided or left as default piecewise E")
