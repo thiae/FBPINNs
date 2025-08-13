@@ -468,12 +468,13 @@ class BiotCoupledTrainer_Heterogeneous:
         dp_dy     = fd_grad_y(p_g).flatten()
         lap_p     = fd_lap(p_g).flatten()
 
-        # heterogeneous k and its gradients
+        # heterogeneous k and its gradients (two-argument function for correct argnums)
         xs, ys = XYT[:,0], XYT[:,1]
         k_val  = k_fun(xs, ys)
-        def k_scalar(z): return k_fun(z[0], z[1])
-        dk_dx = jax.vmap(jax.grad(k_scalar, argnums=0))(jnp.stack([xs, ys], axis=1))
-        dk_dy = jax.vmap(jax.grad(k_scalar, argnums=1))(jnp.stack([xs, ys], axis=1))
+        def k_fun_xy(x_, y_):
+            return k_fun(x_, y_)
+        dk_dx = jax.vmap(jax.grad(k_fun_xy, argnums=0))(xs, ys)
+        dk_dy = jax.vmap(jax.grad(k_fun_xy, argnums=1))(xs, ys)
 
         # time derivatives
         if method == 'fd_xy_ad_t':
