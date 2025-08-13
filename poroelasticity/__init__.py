@@ -6,13 +6,22 @@ This module contains trainer implementations for Biot poroelasticity problems:
 - biot_trainer_2d_data.py: 2D data-enhanced implementation
 """
 
-# Primary import from base_model (main implementation)
-from .base_model import BiotCoupled2D, BiotCoupledTrainer
+# Primary imports from trainers package
+from .trainers.base_model import BiotCoupled2D, BiotCoupledTrainer
 
+__all__ = ['BiotCoupled2D', 'BiotCoupledTrainer']
+
+# Optional extras (available if their modules import correctly)
 try:
-    from .coupled_model import BiotCoupledDataTrainer, VTKDataLoader, DataEnhancedTrainer
-    __all__ = ['BiotCoupled2D', 'BiotCoupledTrainer', 
-               'BiotCoupledDataTrainer', 'VTKDataLoader', 'DataEnhancedTrainer']
-except ImportError:
-    # Data trainer optional (requires additional dependencies)
-    __all__ = ['BiotCoupled2D', 'BiotCoupledTrainer']
+    from .trainers.coupled_model import (
+        BiotCoupled2D_Heterogeneous,
+        BiotCoupledTrainer_Heterogeneous,
+        FixedTrainer,
+    )
+    __all__ += [
+        'BiotCoupled2D_Heterogeneous',
+        'BiotCoupledTrainer_Heterogeneous',
+        'FixedTrainer',
+    ]
+except Exception:
+    pass
