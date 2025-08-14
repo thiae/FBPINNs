@@ -57,7 +57,7 @@ class BiotCoupled2D_Heterogeneous(Problem):
 
     @staticmethod
     def default_k_fun(x, y):
-        """Default permeability profile: a high‐perm reservoir overlain by a low‐perm caprock.
+        """Default permeability profile: a high perm reservoir overlain by a low perm caprock.
 
         The domain is `y∈[0,1]` with the caprock occupying the top
         portion (y < 0.3) and the reservoir below.  A hyperbolic
@@ -74,22 +74,22 @@ class BiotCoupled2D_Heterogeneous(Problem):
         ndarray
             Permeability values at the given coordinates.
         """
-        k_reservoir = 10.0  # high permeability in the reservoir (nondim)
-        k_caprock = 0.1     # low permeability in the caprock (nondim)
+        k_reservoir = 10.0  # high permeability in the reservoir
+        k_caprock = 0.1     # low permeability in the caprock
         interface_y = 0.3
-        sharpness = 40.0
+        sharpness = 20.0  
         # weight ~1 in caprock, ~0 in reservoir
         w = 0.5 * (1.0 + jnp.tanh(sharpness * (interface_y - y)))
         return k_caprock + (k_reservoir - k_caprock) * (1.0 - w)
 
     @staticmethod
-    def default_E_fun(x, y, E_res=5000.0, E_cap=7000.0, interface_y=0.3, sharpness=40.0):
+    def default_E_fun(x, y, E_res=5000.0, E_cap=7000.0, interface_y=0.3, sharpness=20.0):
         """Default Young's modulus: piecewise (reservoir vs caprock) with smooth transition.
 
         Caprock (above interface) stiffer than reservoir (below). Smooth tanh transition keeps
         autodiff stable.
         """
-        w = 0.5 * (1.0 + jnp.tanh(sharpness * (interface_y - y)))  # ~1 caprock, ~0 reservoir
+        w = 0.5 * (1.0 + jnp.tanh(sharpness * (interface_y - y))) # ~1 caprock, ~0 reservoir
         return E_cap * w + E_res * (1.0 - w)
 
     @staticmethod
@@ -125,11 +125,10 @@ class BiotCoupled2D_Heterogeneous(Problem):
 
         # Default functions if none provided
         if k_fun is None:
-            # wrap constant k into a function
             k_fun = lambda x, y, k_val=k: jnp.broadcast_to(k_val, x.shape)
         if E_fun is None:
             # Default to piecewise E (reservoir vs caprock) with smooth interface
-            E_fun = BiotCoupled2D_Heterogeneous.default_E_fun
+            E_fun = BiotCoupled2D_Heterogeneous.default_E_fun 
 
         # Derive uniform stiffness parameters for scaling; local values
         # will be computed in the loss when heterogeneity is active.
@@ -138,17 +137,9 @@ class BiotCoupled2D_Heterogeneous(Problem):
 
         static_params = {
             "dims": (3, 3),
-            "E": E,
-            "nu": nu,
-            "G": G,
-            "lam": lam,
-            "k": k,
-            "mu": mu,
-            "alpha": alpha,
-            "M": M,
-            # store the heterogeneity functions
-            "k_fun": k_fun,
-            "E_fun": E_fun
+            "E": E, "nu": nu, "G": G, "lam": lam,
+            "k": k, "mu": mu, "alpha": alpha, "M": M,
+            "k_fun": k_fun, "E_fun": E_fun
         }
         trainable_params = {}
         return static_params, trainable_params
@@ -156,9 +147,6 @@ class BiotCoupled2D_Heterogeneous(Problem):
     @staticmethod
     def constraining_fn(all_params, x_batch, u):
         """Impose hard BCs and ICs on the raw network output.
-
-        This method is identical to the homogeneous version.  See
-        `biot_coupled_homogeneous.py` for detailed documentation.
         """
         x = x_batch[:, 0:1]
         y = x_batch[:, 1:2]
@@ -189,8 +177,6 @@ class BiotCoupled2D_Heterogeneous(Problem):
     @staticmethod
     def sample_constraints(all_params, domain, key, sampler, batch_shapes):
         """Sample collocation points and specify derivative orders.
-
-        Reuses the specification from the homogeneous model.
         """
         dom = all_params["static"].setdefault("domain", {})
         d = all_params["static"]["problem"]["dims"][1]
@@ -235,40 +221,48 @@ class BiotCoupled2D_Heterogeneous(Problem):
         values of G and λ are computed at each collocation point.
         """
         prob = all_params["static"]["problem"]
-        # Homogeneous baseline values (used for scaling)
         E0 = prob["E"]
         nu = prob["nu"]
         alpha = prob["alpha"]
         mu = prob["mu"]
         M = prob["M"]
-        # Heterogeneous functions
         k_fun = prob.get("k_fun")
         E_fun = prob.get("E_fun")
+        
         # Unpack derivatives and collocation points
         x_batch_phys = constraints[0][0]
         x = x_batch_phys[:, 0]
         y = x_batch_phys[:, 1]
-        (
-            duxdx, d2uxdx2, d2uxdy2, d2uxdxdy,
-            duydy, d2uydx2, d2uydy2, d2uydxdy,
-            dpdx, dpdy, d2pdx2, d2pdy2,
-            p_t, duxdx_t, duydy_t
-        ) = constraints[0][1:16]
+        
+        (duxdx, d2uxdx2, d2uxdy2, d2uxdxdy,
+         duydy, d2uydx2, d2uydy2, d2uydxdy,
+         dpdx, dpdy, d2pdx2, d2pdy2,
+         p_t, duxdx_t, duydy_t) = constraints[0][1:16]
+        
         div_u = duxdx + duydy
         div_u_t = duxdx_t + duydy_t
         lap_p = d2pdx2 + d2pdy2
-        # Compute local permeability and its gradients (two-argument wrapper for grad)
+        
+        # Compute local permeability
         k_val = k_fun(x, y)
-        def k_fun_xy(x_, y_):
-            return k_fun(x_, y_)
-        dk_dx = jax.vmap(jax.grad(k_fun_xy, argnums=0))(x, y)
-        dk_dy = jax.vmap(jax.grad(k_fun_xy, argnums=1))(x, y)
-        # Compute local elastic constants from E_fun (required for heterogeneous mechanics)
+        
+        # Efficient finite difference gradient computation
+        eps = 1e-4
+        k_x_plus = k_fun(x + eps, y)
+        k_x_minus = k_fun(x - eps, y)
+        k_y_plus = k_fun(x, y + eps)
+        k_y_minus = k_fun(x, y - eps)
+        
+        dk_dx = (k_x_plus - k_x_minus) / (2 * eps)
+        dk_dy = (k_y_plus - k_y_minus) / (2 * eps)
+        
+        # Compute local elastic constants
         if E_fun is None:
             raise ValueError("E_fun must be provided or left as default piecewise E")
         E_local = E_fun(x, y)
         G_local = E_local / (2.0 * (1.0 + nu))
         lam_local = E_local * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+        
         # Mechanics residuals
         equilibrium_x = (
             (2 * G_local + lam_local) * d2uxdx2
@@ -284,17 +278,30 @@ class BiotCoupled2D_Heterogeneous(Problem):
             + (2 * G_local + lam_local) * d2uydy2
             - alpha * dpdy
         )
+        
         # Flow residual
         div_q = (k_val * lap_p + dk_dx * dpdx + dk_dy * dpdy) / mu
         flow_residual = (p_t / M) + alpha * div_u_t - div_q
-        # Characteristic scales for balancing losses
+        
+        # Improved adaptive scaling
         L = 1.0
-        p_scale = 1.0
-        mech_scale = jnp.maximum(E0 / (L ** 2), 1e-6)
-        flow_scale = jnp.maximum(jnp.max(k_val) / mu * (p_scale / (L ** 2)), 1e-8)
+        p_scale = jnp.maximum(jnp.std(constraints[0][0][:, 2:3]), 0.1)
+        
+        # Use average values for better scaling
+        E_avg = jnp.mean(E_local)
+        k_avg = jnp.mean(k_val)
+        
+        mech_scale = jnp.maximum(E_avg / (L ** 2), 1e-6)
+        flow_scale = jnp.maximum((k_avg / mu) * (p_scale / (L ** 2)), 1e-8)
+        
+        # Normalized losses
         mechanics_loss = jnp.mean((equilibrium_x / mech_scale) ** 2 + (equilibrium_y / mech_scale) ** 2)
         flow_loss = jnp.mean((flow_residual / flow_scale) ** 2)
-        return mechanics_loss + flow_loss
+        
+        # Adaptive weighting to balance losses
+        w_flow = jnp.minimum(10.0, jnp.maximum(0.1, mechanics_loss / (flow_loss + 1e-8)))
+        
+        return mechanics_loss + w_flow * flow_loss
 
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape=None):
@@ -303,9 +310,8 @@ class BiotCoupled2D_Heterogeneous(Problem):
 
 class BiotCoupledTrainer_Heterogeneous:
     """
-    Trainer for the heterogeneous Biot problem.  This class mirrors
-    `BiotCoupledTrainer` but uses `BiotCoupled2D_Heterogeneous` as the
-    problem.  It accepts optional permeability and modulus functions to
+    Trainer for the heterogeneous Biot problem.
+    It accepts optional permeability and modulus functions to
     customise the heterogeneity.
     """
 
@@ -346,13 +352,13 @@ class BiotCoupledTrainer_Heterogeneous:
             },
             network=FCN,
             network_init_kwargs={
-                'layer_sizes': [3, 128, 128, 128, 3],
+                'layer_sizes': [3, 128, 128, 128, 128, 3],  
                 'activation': 'tanh'
             },
-            ns=((80, 80, 20), (0,), (0,), (0,), (0,)),
+            ns=((80, 80, 20), (0,), (0,), (0,), (0,)),  
             n_test=(20, 20, 5),
             n_steps=n_steps,
-            optimiser_kwargs={'learning_rate': 1e-3},
+            optimiser_kwargs={'learning_rate': 5e-4},  
             summary_freq=100,
             test_freq=250,
             show_figures=False,
@@ -383,7 +389,7 @@ class BiotCoupledTrainer_Heterogeneous:
 
     def verify_bcs(self, n_points=100, t=1.0):
         print("\n" + "="*60)
-        print(f"Boundary Conditon Verification at t={t}")
+        print(f"Boundary Condition Verification at t={t}")
         print("="*60)
         y_test = jnp.linspace(0, 1, n_points)
         tcol = jnp.full((n_points, 1), float(t))
@@ -423,153 +429,191 @@ class BiotCoupledTrainer_Heterogeneous:
         return max_violation < 1e-2
 
     def compute_physics_metrics(self, n_points=50, method='fd_xy_ad_t', t=1.0, chunk=4096):
-        """Physics metrics for heterogeneous k using div(q) with JAX-safe time derivs."""
+        """Physics metrics with proper heterogeneous residual computation.
+    
+        Method options :
+        - 'fd_xy_ad_t': Finite differences in x,y + autodiff in t (DEFAULT, includes time derivatives)
+        - 'steady_fd': Steady state assumption (no time derivatives, for debugging only)
+        - 'autodiff_all': Full autodiff in x,y,t (most accurate but memory intensive)
+        """
         if self.all_params is None:
             raise ValueError("Model not trained yet")
-        if method not in ('fd_xy_ad_t','steady_fd'):
-            raise ValueError("method must be one of {'fd_xy_ad_t','steady_fd'} for heterogeneous validation")
-
-        # grid (avoid edges for FD)
+            
+        # Sample interior points (avoid edges for FD)
         x = jnp.linspace(0.1, 0.9, n_points)
         y = jnp.linspace(0.1, 0.9, n_points)
         X, Y = jnp.meshgrid(x, y)
         XYT = jnp.column_stack([X.flatten(), Y.flatten(), jnp.full((n_points*n_points,), float(t))])
-
-        prob  = self.all_params["static"]["problem"]
-        E0, mu, M, alpha, nu = prob["E"], prob["mu"], prob["M"], prob["alpha"], prob["nu"]
-        k_fun = prob.get("k_fun")
-        E_fun = prob.get("E_fun")
-
+        
+        # Get predictions
         pred = self.predict(XYT)
         ux, uy, p = pred[:,0], pred[:,1], pred[:,2]
-
-        # FD helpers
+        
+        # Get problem parameters
+        prob = self.all_params["static"]["problem"]
+        E0, nu, alpha, mu, M = prob["E"], prob["nu"], prob["alpha"], prob["mu"], prob["M"]
+        k_fun = prob.get("k_fun")
+        E_fun = prob.get("E_fun")
+        
+        # Reshape for gradients
         dx, dy = x[1]-x[0], y[1]-y[0]
-        def fd_grad_x(arr): return jnp.gradient(arr, dx, axis=1)
-        def fd_grad_y(arr): return jnp.gradient(arr, dy, axis=0)
-        def fd_lap(arr):
-            return jnp.gradient(jnp.gradient(arr, dx, axis=1), dx, axis=1) + \
-                   jnp.gradient(jnp.gradient(arr, dy, axis=0), dy, axis=0)
-
         ux_g = ux.reshape(n_points, n_points)
         uy_g = uy.reshape(n_points, n_points)
-        p_g  = p.reshape(n_points, n_points)
-
-        dux_dx  = fd_grad_x(ux_g).flatten()
-        duydy   = fd_grad_y(uy_g).flatten()
-        d2ux_dx2  = jnp.gradient(fd_grad_x(ux_g), dx, axis=1).flatten()
-        d2ux_dy2  = jnp.gradient(fd_grad_y(ux_g), dy, axis=0).flatten()
-        d2ux_dxdy = jnp.gradient(fd_grad_x(ux_g), dy, axis=0).flatten()
-        d2uy_dx2  = jnp.gradient(fd_grad_x(uy_g), dx, axis=1).flatten()
-        d2uy_dy2  = jnp.gradient(fd_grad_y(uy_g), dy, axis=0).flatten()
-        d2uy_dxdy = jnp.gradient(fd_grad_x(uy_g), dy, axis=0).flatten()
-        dp_dx     = fd_grad_x(p_g).flatten()
-        dp_dy     = fd_grad_y(p_g).flatten()
-        lap_p     = fd_lap(p_g).flatten()
-
-        # heterogeneous k and its gradients (two-argument function for correct argnums)
+        p_g = p.reshape(n_points, n_points)
+        
+        # Compute all needed derivatives using FD
+        dux_dx = jnp.gradient(ux_g, dx, axis=1).flatten()
+        dux_dy = jnp.gradient(ux_g, dy, axis=0).flatten()
+        duy_dx = jnp.gradient(uy_g, dx, axis=1).flatten()
+        duy_dy = jnp.gradient(uy_g, dy, axis=0).flatten()
+        
+        d2ux_dx2 = jnp.gradient(jnp.gradient(ux_g, dx, axis=1), dx, axis=1).flatten()
+        d2ux_dy2 = jnp.gradient(jnp.gradient(ux_g, dy, axis=0), dy, axis=0).flatten()
+        d2ux_dxdy = jnp.gradient(jnp.gradient(ux_g, dx, axis=1), dy, axis=0).flatten()
+        
+        d2uy_dx2 = jnp.gradient(jnp.gradient(uy_g, dx, axis=1), dx, axis=1).flatten()
+        d2uy_dy2 = jnp.gradient(jnp.gradient(uy_g, dy, axis=0), dy, axis=0).flatten()
+        d2uy_dxdy = jnp.gradient(jnp.gradient(uy_g, dx, axis=1), dy, axis=0).flatten()
+        
+        dp_dx = jnp.gradient(p_g, dx, axis=1).flatten()
+        dp_dy = jnp.gradient(p_g, dy, axis=0).flatten()
+        lap_p = jnp.gradient(jnp.gradient(p_g, dx, axis=1), dx, axis=1).flatten() + \
+                jnp.gradient(jnp.gradient(p_g, dy, axis=0), dy, axis=0).flatten()
+        
+        # Get heterogeneous properties
         xs, ys = XYT[:,0], XYT[:,1]
-        def k_fun_xy(x_, y_):
-            return k_fun(x_, y_)
-
-        # Chunked evaluation to reduce peak memory
-        N = XYT.shape[0]
-        def chunked_eval(f, xs_, ys_, chunk_):
-            outs = []
-            for i0 in range(0, xs_.shape[0], chunk_):
-                i1 = i0 + chunk_
-                outs.append(f(xs_[i0:i1], ys_[i0:i1]))
-            return jnp.concatenate(outs, axis=0)
-
-        k_val = chunked_eval(lambda a,b: k_fun(a,b), xs, ys, chunk)
-        dk_dx = chunked_eval(lambda a,b: jax.vmap(jax.grad(k_fun_xy, argnums=0))(a,b), xs, ys, chunk)
-        dk_dy = chunked_eval(lambda a,b: jax.vmap(jax.grad(k_fun_xy, argnums=1))(a,b), xs, ys, chunk)
-
-        # time derivatives
-        if method == 'fd_xy_ad_t':
+        k_val = k_fun(xs, ys)
+        E_local = E_fun(xs, ys)
+        
+        # Compute k gradients using same FD method as in loss
+        eps = 1e-4
+        k_x_plus = k_fun(xs + eps, ys)
+        k_x_minus = k_fun(xs - eps, ys)
+        k_y_plus = k_fun(xs, ys + eps)
+        k_y_minus = k_fun(xs, ys - eps)
+        
+        dk_dx = (k_x_plus - k_x_minus) / (2 * eps)
+        dk_dy = (k_y_plus - k_y_minus) / (2 * eps)
+        
+        # Local elastic constants
+        G_local = E_local / (2.0 * (1.0 + nu))
+        lam_local = E_local * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+        
+        # Mechanics residuals (consistent with loss function)
+        equilibrium_x = (
+            (2 * G_local + lam_local) * d2ux_dx2 +
+            lam_local * d2uy_dxdy +
+            G_local * d2ux_dy2 +
+            G_local * d2uy_dxdy -
+            alpha * dp_dx
+        )
+        
+        equilibrium_y = (
+            G_local * d2ux_dxdy +
+            G_local * d2uy_dx2 +
+            lam_local * d2ux_dxdy +
+            (2 * G_local + lam_local) * d2uy_dy2 -
+            alpha * dp_dy
+        )
+        
+        # Flow residual with heterogeneous permeability (consistent with loss)
+        div_q = (k_val * lap_p + dk_dx * dp_dx + dk_dy * dp_dy) / mu
+        
+        # For steady state or if we skip time derivatives
+        if method == 'steady_fd':
+            # Steady snapshot (no time terms) - for debugging only
+            p_t = jnp.zeros_like(p)
+            div_u_t = jnp.zeros_like(p)
+        elif method == 'fd_xy_ad_t':
+            # DEFAULT: Use autodiff for time derivatives 
+            # Get the FBPINN model components for time derivative computation
             active_all = jnp.ones(self.all_params["static"]["decomposition"]["m"], dtype=jnp.int32)
-            takes, _, (_, _, _, cut_all, _)  = get_inputs(XYT, active_all, self.all_params, self.config.decomposition)
+            takes, _, (_, _, _, cut_all, _) = get_inputs(XYT, active_all, self.all_params, self.config.decomposition)
+            
             def predict_batch(xyt_batch):
                 all_params_cut = {"static": cut_all(self.all_params["static"]),
-                                  "trainable": cut_all(self.all_params["trainable"])}
+                                "trainable": cut_all(self.all_params["trainable"])}
                 nf, nn, uf, wf, cf = (self.config.decomposition.norm_fn,
-                                      self.config.network.network_fn,
-                                      self.config.decomposition.unnorm_fn,
-                                      self.config.decomposition.window_fn,
-                                      self.config.problem.constraining_fn)
+                                    self.config.network.network_fn,
+                                    self.config.decomposition.unnorm_fn,
+                                    self.config.decomposition.window_fn,
+                                    self.config.problem.constraining_fn)
                 u, *_ = FBPINN_model_jit(all_params_cut, xyt_batch, takes, (nf, nn, uf, wf, cf), verbose=False)
                 return u
-            # Chunked JVP in time to keep memory bounded
+            
+            # Compute time derivatives using JVP (chunked to avoid memory issues)
+            N = XYT.shape[0]
             Vs = jnp.zeros_like(XYT).at[:,2].set(1.0)
+            
             dudt_parts = []
             for i0 in range(0, N, chunk):
-                i1 = i0 + chunk
+                i1 = min(i0 + chunk, N)
                 _, dudt_part = jax.jvp(predict_batch, (XYT[i0:i1],), (Vs[i0:i1],))
                 dudt_parts.append(dudt_part)
             dudt = jnp.concatenate(dudt_parts, axis=0)
-            p_t  = dudt[:,2]
-            dux_dx_t = fd_grad_x(dudt[:,0].reshape(n_points, n_points)).flatten()
-            duydy_t  = fd_grad_y(dudt[:,1].reshape(n_points, n_points)).flatten()
-        else:
-            p_t = jnp.zeros_like(p)
-            dux_dx_t = jnp.zeros_like(p)
-            duydy_t  = jnp.zeros_like(p)
-
-        # residuals (mechanics with local elastic constants from E_fun)
-        if E_fun is None:
-            raise ValueError("E_fun must be provided for piecewise heterogeneous elasticity in metrics")
-        E_local = E_fun(XYT[:,0], XYT[:,1])
-        G_local = E_local / (2.0 * (1.0 + nu))
-        lam_local = E_local * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-        equilibrium_x = (
-            (2 * G_local + lam_local) * d2ux_dx2 + lam_local * d2uy_dxdy + G_local * d2ux_dy2 + G_local * d2uy_dxdy - alpha * dp_dx
-        )
-        equilibrium_y = (
-            G_local * d2ux_dxdy + G_local * d2uy_dx2 + lam_local * d2ux_dxdy + (2 * G_local + lam_local) * d2uy_dy2 - alpha * dp_dy
-        )
-        div_q = (k_val * lap_p + dk_dx * dp_dx + dk_dy * dp_dy) / mu
-        flow_residual = (p_t / M) + alpha * (dux_dx_t + duydy_t) - div_q
-
-        # metrics (use local E for mechanics scaling)
+            
+            # Extract time derivatives
+            p_t = dudt[:,2]
+            ux_t_grid = dudt[:,0].reshape(n_points, n_points)
+            uy_t_grid = dudt[:,1].reshape(n_points, n_points)
+            
+            # Compute spatial derivatives of time derivatives
+            dux_dx_t = jnp.gradient(ux_t_grid, dx, axis=1).flatten()
+            duy_dy_t = jnp.gradient(uy_t_grid, dy, axis=0).flatten()
+            div_u_t = dux_dx_t + duy_dy_t
+            
+        else:  # 'autodiff_all'
+            # Full autodiff - most accurate but memory intensive
+            raise NotImplementedError("Full autodiff not yet implemented for heterogeneous case")
+        
+        flow_residual = (p_t / M) + alpha * div_u_t - div_q
+        
+        # Compute RMS errors
         mech_x_rms = jnp.sqrt(jnp.mean(equilibrium_x**2))
         mech_y_rms = jnp.sqrt(jnp.mean(equilibrium_y**2))
-        mech_rms   = jnp.sqrt(0.5*(mech_x_rms**2 + mech_y_rms**2))
-        flow_rms   = jnp.sqrt(jnp.mean(flow_residual**2))
-
+        mech_rms = jnp.sqrt(0.5*(mech_x_rms**2 + mech_y_rms**2))
+        flow_rms = jnp.sqrt(jnp.mean(flow_residual**2))
+        
+        # Consistent scaling with loss function
         L = 1.0
-        p_scale = 1.0
-        mech_scale_local = jnp.maximum(E_local / (L ** 2), 1e-6)
-        flow_scale = jnp.maximum((jnp.max(k_val)/mu) * (p_scale / (L**2)), 1e-8)
-        mech_x_rel = jnp.sqrt(jnp.mean((equilibrium_x / mech_scale_local)**2))
-        mech_y_rel = jnp.sqrt(jnp.mean((equilibrium_y / mech_scale_local)**2))
-        mech_rel   = jnp.sqrt(0.5*(mech_x_rel**2 + mech_y_rel**2))
-        flow_rel   = flow_rms   / jnp.maximum(flow_scale, 1e-12)
-        total_rel  = 0.5*(mech_rel + flow_rel)
-
+        p_scale = jnp.maximum(jnp.std(p), 0.1)
+        E_avg = jnp.mean(E_local)
+        k_avg = jnp.mean(k_val)
+        
+        mech_scale = jnp.maximum(E_avg / (L ** 2), 1e-6)
+        flow_scale = jnp.maximum((k_avg / mu) * (p_scale / (L ** 2)), 1e-8)
+        
+        # Relative errors
+        mech_x_rel = mech_x_rms / mech_scale
+        mech_y_rel = mech_y_rms / mech_scale
+        mech_rel = jnp.sqrt(0.5*(mech_x_rel**2 + mech_y_rel**2))
+        flow_rel = flow_rms / flow_scale
+        total_rel = 0.5*(mech_rel + flow_rel)
+        
         status = ("EXCELLENT" if total_rel < 1e-3 else
-                  "VERY GOOD" if total_rel < 1e-2 else
-                  "GOOD"      if total_rel < 5e-2 else
-                  "ACCEPTABLE"if total_rel < 1e-1 else
-                  "NEEDS IMPROVEMENT")
-
+                "VERY GOOD" if total_rel < 1e-2 else
+                "GOOD" if total_rel < 5e-2 else
+                "ACCEPTABLE" if total_rel < 1e-1 else
+                "NEEDS IMPROVEMENT")
+        
         return {
             'mechanics_x_rms': float(mech_x_rms),
             'mechanics_y_rms': float(mech_y_rms),
-            'mechanics_rms'  : float(mech_rms),
-            'flow_rms'       : float(flow_rms),
+            'mechanics_rms': float(mech_rms),
+            'flow_rms': float(flow_rms),
             'mechanics_x_rel': float(mech_x_rel),
             'mechanics_y_rel': float(mech_y_rel),
-            'mechanics_rel'  : float(mech_rel),
-            'flow_rel'       : float(flow_rel),
-            'total_rel'      : float(total_rel),
-            'status'         : status,
-            'u_scale'        : float(jnp.maximum(jnp.max(jnp.abs(ux)), jnp.max(jnp.abs(uy)))),
-            'p_scale'        : float(p_scale),
-            'method'         : method
+            'mechanics_rel': float(mech_rel),
+            'flow_rel': float(flow_rel),
+            'total_rel': float(total_rel),
+            'status': status,
+            'u_scale': float(jnp.max(jnp.abs(ux))),
+            'p_scale': float(p_scale),
+            'method': method
         }
 
     def track_convergence_history(self, checkpoint_steps=[200, 1000, 2000, 4000, 6000, 8000],
-                                  save_checkpoints=True, checkpoint_dir="checkpoints"):
+                                save_checkpoints=True, checkpoint_dir="checkpoints"):
         print("\n" + "="*60)
         print("CONVERGENCE HISTORY TRACKING (heterogeneous)")
         print("="*60)
