@@ -630,7 +630,7 @@ class BiotCoupledTrainer_Heterogeneous:
                 self.train(n_steps=steps_to_train)
                 previous_steps = step
 
-            metrics = self.compute_physics_metrics(n_points=30, method='fd_xy_ad_t')
+            metrics = self.compute_physics_metrics(n_points=20, method='fd_xy_ad_t')
             bc_metrics = self.verify_bcs(n_points=20, t=1.0)
 
             history['steps'].append(step)
