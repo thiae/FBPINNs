@@ -306,10 +306,6 @@ class BiotCoupled2D_Heterogeneous(Problem):
         # Clamp to reasonable range to prevent instability
         w_flow = jnp.clip(w_flow, 0.1, 100.0)
         
-        # Debug print (comment out after testing)
-        if jax.random.uniform(jax.random.PRNGKey(0)) < 0.01:  # Print 1% of time
-            print(f"M: {float(mechanics_loss):.2e}, F: {float(flow_loss):.2e}, w: {float(w_flow):.1f}")
-        
         return mechanics_loss + w_flow * flow_loss
 
     @staticmethod
