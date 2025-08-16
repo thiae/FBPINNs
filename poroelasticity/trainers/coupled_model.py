@@ -298,15 +298,11 @@ class BiotCoupled2D_Heterogeneous(Problem):
         mechanics_loss = jnp.mean((equilibrium_x / mech_scale) ** 2 + (equilibrium_y / mech_scale) ** 2)
         flow_loss = jnp.mean((flow_residual / flow_scale) ** 2)
         
-        # INVERSE ADAPTIVE WEIGHTING
-        # When flow struggles (high loss), increase its weight
-        # sqrt dampens oscillations, preventing wild swings
-        w_flow = jnp.sqrt(flow_loss / (mechanics_loss + 1e-8))
+        # FIXED WEIGHTING
+        w_flow = 20.0
+        w_mechanics = 1.0
         
-        # Clamp to reasonable range to prevent instability
-        w_flow = jnp.clip(w_flow, 0.1, 100.0)
-        
-        return mechanics_loss + w_flow * flow_loss
+        return w_mechanics * mechanics_loss + w_flow * flow_loss
 
     @staticmethod
     def exact_solution(all_params, x_batch, batch_shape=None):
