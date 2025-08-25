@@ -159,7 +159,7 @@ class BiotCoupled2D_Heterogeneous(Problem):
             return 1.0 - jnp.exp(-5.0 * jnp.clip(t, 0.0, 1.0))
 
         p0 = jnp.zeros_like(t)
-        injection_center, sigma = 0.4, 0.08
+        injection_center, sigma = 0.15, 0.08
         gauss_y = jnp.exp(-((y - injection_center) ** 2) / (2.0 * sigma ** 2))
         pL = p0 + S(t) * gauss_y
         pR = p0 * 0.0
@@ -400,7 +400,7 @@ class BiotCoupledTrainer_Heterogeneous:
         left_pred = self.predict(left_points)
         right_pred = self.predict(right_points)
         bottom_pred = self.predict(bottom_points)
-        injection_center, sigma = 0.4, 0.08
+        injection_center, sigma = 0.15, 0.08
         S = 1.0 - jnp.exp(-5.0 * float(t))
         pL = S * jnp.exp(-((y_test - injection_center) ** 2) / (2 * sigma ** 2))
         print(f"Left boundary (x=0): ux=0, uy=0, p=pL(y,t)")
