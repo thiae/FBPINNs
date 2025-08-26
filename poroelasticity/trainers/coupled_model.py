@@ -60,7 +60,7 @@ class BiotCoupled2D_Heterogeneous(Problem):
         """Default permeability profile: a high perm reservoir overlain by a low perm caprock.
 
         The domain is `y∈[0,1]` with the caprock occupying the top
-        portion (y < 0.3) and the reservoir below.  A hyperbolic
+        portion (y > 0.3) and the reservoir below.  A hyperbolic
         tangent is used to smoothly transition between the two zones.
 
         Parameters
@@ -79,17 +79,17 @@ class BiotCoupled2D_Heterogeneous(Problem):
         interface_y = 0.3
         sharpness = 20.0  
         # weight ~1 in caprock, ~0 in reservoir
-        w = 0.5 * (1.0 + jnp.tanh(sharpness * (interface_y - y)))
-        return k_caprock + (k_reservoir - k_caprock) * (1.0 - w)
+        w = 0.5 * (1.0 + jnp.tanh(sharpness * (y - interface_y)))
+        return k_caprock * w + k_reservoir * (1.0 - w)
 
     @staticmethod
     def default_E_fun(x, y, E_res=5000.0, E_cap=7000.0, interface_y=0.3, sharpness=20.0):
         """Default Young's modulus: piecewise (reservoir vs caprock) with smooth transition.
 
-        Caprock (above interface) stiffer than reservoir (below). Smooth tanh transition keeps
+        Caprock (y > 0.3, above interface) stiffer than reservoir (y < 0.3, below interface). Smooth tanh transition keeps
         autodiff stable.
         """
-        w = 0.5 * (1.0 + jnp.tanh(sharpness * (interface_y - y))) # ~1 caprock, ~0 reservoir
+        w = 0.5 * (1.0 + jnp.tanh(sharpness * (y - interface_y))) # ~1 caprock, ~0 reservoir
         return E_cap * w + E_res * (1.0 - w)
 
     @staticmethod
