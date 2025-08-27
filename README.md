@@ -1,3 +1,16 @@
+ **IMPORTANT: This repository contains a student project built on top of FBPINNs. For the main project implementation, please navigate to the [`poroelasticity`](./poroelasticity) folder.**
+
+## Project Overview
+This repository houses a coupled poroelasticity simulation project for CO₂ storage applications, developed as part of the Independent Research Project for the Geo-Energy Program at Imperial College London. The project extends the FBPINNs framework to solve coupled Biot equations for flow mechanics problems.
+
+### Main Project Location
+**The primary implementation is in the [`poroelasticity`](./poroelasticity) directory**, which contains:
+- Coupled Biot model implementation
+- Training notebooks and examples
+- Documentation and results
+
+
+
                                                             # Finite basis physics-informed neural networks (FBPINNs)
 
 ---

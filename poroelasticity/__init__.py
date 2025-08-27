@@ -1,27 +1,4 @@
-"""
-Biot Poroelasticity Trainers
+"""Poroelasticity simulations using FBPINNs for CO2 storage."""
 
-This module contains trainer implementations for Biot poroelasticity problems:
-- base_model.py: Main implementation with complete functionality
-- biot_trainer_2d_data.py: 2D data-enhanced implementation
-"""
-
-# Primary imports from trainers package
-from .trainers.base_model import BiotCoupled2D, BiotCoupledTrainer
-
-__all__ = ['BiotCoupled2D', 'BiotCoupledTrainer']
-
-# Optional extras (available if their modules import correctly)
-try:
-    from .trainers.coupled_model import (
-        BiotCoupled2D_Heterogeneous,
-        BiotCoupledTrainer_Heterogeneous,
-        FixedTrainer,
-    )
-    __all__ += [
-        'BiotCoupled2D_Heterogeneous',
-        'BiotCoupledTrainer_Heterogeneous',
-        'FixedTrainer',
-    ]
-except Exception:
-    pass
+__version__ = "1.0.0"
+__author__ = "Ogechi Cynthia Eze"
