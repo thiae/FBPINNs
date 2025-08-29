@@ -22,31 +22,21 @@ Imperial College London
 
 ### Working Setup (Tested on Google Colab)
 
-# Cell 1: Clone and initial setup
-!git clone https://github.com/thiae/FBPINNs.git
-%cd FBPINNs
-!python colab_setup.py (Automatically uses method = 'auto' which defaults to 'path')
+# For reproducibility, run notebooks directly and change parameters for sensitivity analysis
+- Open Notebooks/base_model.ipynb or Notebooks/coupled_model.ipynb
+- Each notebook is self contained with setup code
 
-# Cell 2: Navigate to project and setup paths
+# 1. Clone repository
+!git clone https://github.com/thiae/FBPINNs.git
+
+# 2. Navigate and setup
+%cd FBPINNs
+!python colab_setup.py
+
+# 3. Go to project folder
 %cd poroelasticity
 !python setup_path.py
-
-# Cell 3: Verify paths are set (optional but recommended)
-import sys
-from pathlib import Path
-current_dir = Path.cwd()
-fbpinns_root = current_dir.parent
-print(f"Current: {current_dir}")
-print(f"FBPINNs root: {fbpinns_root}")
-print(f"Path configured: {str(fbpinns_root) in sys.path}")
-
-# Cell 4: Validate
 !python simple_validation.py
-
-If validation passes, you're ready to run the notebooks.
-
-# Running the Notebooks
-After setup, the notebooks in Notebooks/ can be run directly:
 
 base_model.ipynb - Single physics validation
 coupled_model.ipynb - Full coupled simulation
